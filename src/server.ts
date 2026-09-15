@@ -10,6 +10,7 @@ import {
   ambiguousLibrary,
   writeNeedsLibrary,
   findLibrary,
+  namedWriteLibrary,
   libraryNotFound,
   pickDefaultLibrary,
 } from "./library-select.js";
@@ -124,7 +125,8 @@ const WRITE_LIBRARY_NOTE =
   "rather than picking one, and lists them; nothing is written. That is so whatever their track " +
   "counts are -- the count never said which disk should change. Ask the user which one, then " +
   "retry with `library` set; do not pick for them, since one of them may be the drive they " +
-  "perform from.";
+  "perform from. A library copied onto another drive keeps its uuid, so naming a uuid that " +
+  "two connected libraries share is refused the same way -- pass the path.";
 
 /**
  * Not UNDO_SCOPE_NOTE: that one says Engine copies *playlist* changes between
@@ -325,6 +327,13 @@ export async function createServer(
     return findLibrary(knownList(), requested) ?? libraryNotFound(requested, knownList());
   };
 
+  /** Resolves `library` the read way -- see selectLibrary -- then prepares it. */
+  const acquire = async (requested?: string): Promise<LibraryState | EngineError> => {
+    const lib = selectLibrary(requested);
+    if (isEngineError(lib)) return lib;
+    return prepare(lib);
+  };
+
   /**
    * `index_stale` is swallowed only when an index is genuinely attached:
    * "the previous index is still in use" is a reason to answer anyway, but
@@ -335,9 +344,7 @@ export async function createServer(
    * string "no such table: side.track_derived", instead of `index_stale`
    * with a `retry_after_ms` the model can act on.
    */
-  const acquire = async (requested?: string): Promise<LibraryState | EngineError> => {
-    const lib = selectLibrary(requested);
-    if (isEngineError(lib)) return lib;
+  const prepare = async (lib: LibraryInfo): Promise<LibraryState | EngineError> => {
     const state = stateFor(lib);
     const fresh = await state.mgr.ensureFresh();
     if (!isEngineError(fresh)) return state;
@@ -346,8 +353,13 @@ export async function createServer(
   };
 
   /**
-   * `acquire` for the write tools: identical, except that an omitted
-   * `library` must resolve to exactly one candidate.
+   * The library a write may land in, without touching its search index. A
+   * tool that addresses tracks by id needs no index, and building one right
+   * before a write only makes it stale the moment the write commits.
+   * acquireForWrite adds the index for the tools that resolve playlists.
+   *
+   * Selection differs from a read's in that it must name exactly one
+   * physical library, whether `library` was omitted or given.
    *
    * `pickDefaultLibrary` breaks a tie on root-scan order, which is
    * deterministic and, for a read, fine -- libraries tie because one is a
@@ -360,42 +372,43 @@ export async function createServer(
    * USB drive both held 257 tracks, tied precisely because one was a copy of
    * the other.
    *
-   * Only the omitted case refuses. A caller who named a library gets it, tie
-   * or no tie -- the ambiguity being refused here is the server's, not theirs.
+   * A named library is taken as named -- unless the name is a uuid two
+   * connected libraries share. Copying an Engine Library folder onto another
+   * drive copies its uuid, and resolving that uuid to the first match is the
+   * same root-scan pick as the omitted case, just reached by a caller who had
+   * no way to know it was ambiguous. namedWriteLibrary refuses it; a path
+   * always names one.
    *
-   * Rescans first, because `knownList()` is a cache that deliberately keeps a
-   * library a later scan cannot see -- so a momentarily locked drive does not
-   * vanish from list_libraries. For a tie check that is wrong in the
-   * direction that bites: pull the USB drive and one library is left, but the
-   * cache still holds two, and the write is refused naming a drive that is no
-   * longer there. rescanLibraries() forgets a candidate whose path is gone,
-   * which is exactly the distinction wanted here, and it also lets a drive
-   * plugged in mid-session be seen at all.
+   * Rescans first, in both cases, because `knownList()` is a cache that
+   * deliberately keeps a library a later scan cannot see -- so a momentarily
+   * locked drive does not vanish from list_libraries. For a tie check that is
+   * wrong in the direction that bites: pull the USB drive and one library is
+   * left, but the cache still holds two, and the write is refused naming a
+   * drive that is no longer there. rescanLibraries() forgets a candidate
+   * whose path is gone, which is exactly the distinction wanted here, and it
+   * also lets a drive plugged in mid-session be seen at all -- including a
+   * copy that makes a named uuid ambiguous.
    *
    * The cost is one filesystem probe per write, against a write that is about
    * to copy the entire database for its pre-write snapshot. Reads are left
    * alone: they run far more often and a stale pick between two copies is not
    * worth a probe apiece.
    */
-  /**
-   * The library a write may land in, without touching its search index. A
-   * tool that addresses tracks by id needs no index, and building one right
-   * before a write only makes it stale the moment the write commits.
-   * acquireForWrite adds the index for the tools that resolve playlists.
-   */
   const selectForWrite = (requested?: string): LibraryInfo | EngineError => {
-    if (requested === undefined) {
-      rescanLibraries();
-      const choices = writeNeedsLibrary(knownList());
-      if (choices.length > 0) return ambiguousLibrary(choices);
-    }
-    return selectLibrary(requested);
+    rescanLibraries();
+    if (requested !== undefined) return namedWriteLibrary(knownList(), requested);
+    const choices = writeNeedsLibrary(knownList());
+    if (choices.length > 0) return ambiguousLibrary(choices);
+    return selectLibrary();
   };
 
   const acquireForWrite = async (requested?: string): Promise<LibraryState | EngineError> => {
     const lib = selectForWrite(requested);
     if (isEngineError(lib)) return lib;
-    return acquire(requested);
+    // The library just resolved, not `requested` again by the read rules:
+    // today both give the same answer, but only this one was checked for a
+    // uuid shared between copies.
+    return prepare(lib);
   };
 
   /**

@@ -33,11 +33,12 @@ export const ERROR_CODES = [
   "playlist_chain_damaged",
   "playlist_not_found",
   "invalid_position",
-  // No `library` was passed and the default rule names no single winner --
-  // two supported libraries hold the same, highest track count. Its own code
-  // rather than invalid_argument because the useful client response is
-  // specific: ask which drive, then retry with `library` set. Only writes
-  // raise it; see library-select.ts for why reads still choose.
+  // A write cannot tell which physical library to change: no `library` was
+  // passed and more than one supported library is connected, or the uuid
+  // passed is shared by copies on different drives. Its own code rather than
+  // invalid_argument because the useful client response is specific: ask
+  // which drive, then retry with its path. Only writes raise it; see
+  // library-select.ts for why reads still choose.
   "ambiguous_library",
   // update_track_metadata (spec §7.2). stale_value: an `expect` no longer
   // matches what is in the library. track_not_editable: this track, or one

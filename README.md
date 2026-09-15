@@ -407,7 +407,7 @@ own checks.
 | --- | --- | --- |
 | `invalid_argument` | The arguments do not make sense — both `playlist_id` and `playlist_name`, an empty list where one is required, or a `playlist_name` that matches several playlists (every candidate is listed). | yes |
 | `library_not_found` | `library` names nothing connected — the refusal lists what is — or the library's header could not be read. | yes |
-| `ambiguous_library` | No `library` given, and more than one supported library is connected. Lists them — see [Choosing a library](#choosing-a-library). | yes |
+| `ambiguous_library` | No `library` given, and more than one supported library is connected — or the uuid given is shared by copies on different drives. Lists them — see [Choosing a library](#choosing-a-library). | yes |
 | `unsupported_schema` | The library's version is outside what this server supports. | yes |
 | `library_needs_recovery` | Engine DJ left an unrecovered journal. Launch Engine once. | yes |
 | `library_busy` | Something holds a conflicting lock right now. Retry. | yes |
@@ -463,6 +463,14 @@ there; a track's genre is not, and you are left believing the edit did not
 work.
 
 With a single library nothing changes: you never have to name it.
+
+**Copies share a uuid.** Copy an `Engine Library` folder onto another drive —
+a spare stick for a gig — and the copy keeps the original's uuid, so with both
+connected one uuid names two libraries. A write naming that uuid is refused the
+same way, with `ambiguous_library` listing both paths, rather than landing on
+whichever drive was scanned first. Pass the path: it always names exactly one.
+A read naming a shared uuid still uses the first, as it would by default.
+Drives plugged in after the server started are counted before every write.
 
 The refusal tells the assistant to **ask you** rather than choose. Otherwise
 "pass `library`, here are the two" is an invitation to take the first one,

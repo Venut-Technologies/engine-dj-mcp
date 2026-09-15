@@ -1,6 +1,7 @@
 // tests/library-selection.test.ts
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -14,8 +15,11 @@ import {
   writeNeedsLibrary,
   ambiguousLibrary,
   findLibrary,
+  findLibraries,
+  namedWriteLibrary,
   libraryNotFound,
 } from "../src/library-select.js";
+import { isEngineError, type EngineError } from "../src/errors.js";
 import type { LibraryInfo } from "../src/discovery.js";
 
 /**
@@ -158,6 +162,43 @@ describe("findLibrary", () => {
   it("does not match a value that merely contains a library path", () => {
     expect(findLibrary(libs, drive.path + "/nope")).toBeNull();
     expect(findLibrary(libs, dirname(drive.path))).toBeNull();
+  });
+});
+
+describe("a named library for a write", () => {
+  // A library copied onto a second drive carries the original's uuid, so a
+  // uuid can name two physical libraries. Only the path tells them apart.
+  const shared = "12345678-aaaa-4aaa-8aaa-123456789abc";
+  const first = info({ path: "/Volumes/DJ-USB/Engine Library/Database2/m.db", uuid: shared, trackCount: 257 });
+  const clone = info({ path: "/Volumes/DJ-BACKUP/Engine Library/Database2/m.db", uuid: shared, trackCount: 257 });
+  const other = info({ path: "/Volumes/OTHER/Engine Library/Database2/m.db" });
+
+  it("finds every library a shared uuid names, not just the first scanned", () => {
+    expect(findLibraries([first, other, clone], shared)).toEqual([first, clone]);
+  });
+
+  it("refuses a uuid that names two libraries, listing both paths, instead of taking the first", () => {
+    const r = namedWriteLibrary([first, other, clone], shared.toUpperCase());
+    expect(isEngineError(r), `resolved to ${(r as LibraryInfo).path}`).toBe(true);
+    const e = r as EngineError;
+    expect(e.error).toBe("ambiguous_library");
+    expect(e.detail).toBe("not_committed");
+    expect(e.message).toContain(first.path);
+    expect(e.message).toContain(clone.path);
+    expect(e.message).not.toContain(other.path);
+  });
+
+  it("resolves the same shared uuid's libraries by exact path, each to itself", () => {
+    expect(namedWriteLibrary([first, other, clone], clone.path)).toBe(clone);
+    expect(namedWriteLibrary([first, other, clone], first.path)).toBe(first);
+  });
+
+  it("still resolves a uuid only one library holds", () => {
+    expect(namedWriteLibrary([first, other, clone], other.uuid)).toBe(other);
+  });
+
+  it("reports a value that names nothing as library_not_found", () => {
+    expect((namedWriteLibrary([first, clone], "typo") as EngineError).error).toBe("library_not_found");
   });
 });
 
@@ -874,5 +915,144 @@ describe("a write with two libraries tied for the default", () => {
     const body = r.structuredContent as any;
     expect(body.error).toBeUndefined();
     expect(body.tracks.length).toBe(1);
+  });
+});
+
+describe("a write naming a uuid two connected libraries share", () => {
+  // Copying an Engine Library folder onto another drive -- a spare stick for a
+  // gig -- copies its uuid with it. Both are then connected under one uuid, and
+  // naming that uuid must not quietly pick whichever drive was scanned first.
+  const SHARED = "abababab-9999-4999-8999-abababababab";
+  let root: string, aRoot: string, bRoot: string, aMdb: string, bMdb: string;
+  let seq = 0;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "edj-shared-uuid-"));
+    aRoot = join(root, "a");
+    bRoot = join(root, "b");
+    mkdirSync(aRoot);
+    mkdirSync(bRoot);
+    aMdb = makeLibrary(aRoot, { tracks: 20, uuid: SHARED });
+    bMdb = makeLibrary(bRoot, { tracks: 20, uuid: SHARED });
+    addPlaylists(aMdb, [{ id: 1, title: "Set", nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] }]);
+    addPlaylists(bMdb, [{ id: 1, title: "Set", nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] }]);
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const writeServer = async (roots: string[]) => {
+    const server = await createServer({
+      roots,
+      sidecarBaseDir: join(root, `sidecars-${++seq}`),
+      allowWrites: true,
+      backupBaseDir: join(root, "backups"),
+    });
+    openServers.push(server);
+    const client = new Client({ name: "shared-uuid-client", version: "0" });
+    const [st, ct] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return client;
+  };
+
+  /** The whole file: "changed neither" covers every table, not one count. */
+  const digest = (mdb: string) => createHash("sha256").update(readFileSync(mdb)).digest("hex");
+
+  const entryCount = (mdb: string) => {
+    const db = new DatabaseSync(mdb, { readOnly: true });
+    const n = (db.prepare("SELECT COUNT(*) AS n FROM PlaylistEntity WHERE listId = 1").get() as any).n;
+    db.close();
+    return n as number;
+  };
+
+  it("fixture sanity: both libraries really are connected under the one uuid", async () => {
+    const client = await writeServer([aRoot, bRoot]);
+    const r = await client.callTool({ name: "list_libraries", arguments: {} });
+    const libs = (r.structuredContent as any).libraries as { uuid: string; path: string }[];
+    expect(libs.filter((l) => l.uuid === SHARED).map((l) => l.path)).toEqual([aMdb, bMdb]);
+  });
+
+  for (const [tool, args] of [
+    ["add_tracks_to_playlist", { playlist_id: 1, track_ids: [5] }],
+    ["update_track_metadata", { updates: [{ id: 1, genre: "Zzz Shared Uuid" }] }],
+  ] as const) {
+    it(`${tool} refuses the shared uuid, naming both paths, and changes neither database`, async () => {
+      const client = await writeServer([aRoot, bRoot]);
+      const beforeA = digest(aMdb);
+      const beforeB = digest(bMdb);
+      const r = await client.callTool({ name: tool, arguments: { ...args, library: SHARED } });
+      const body = r.structuredContent as any;
+      expect(body.error, `went through into ${body.library?.path}`).toBe("ambiguous_library");
+      expect(body.detail).toBe("not_committed");
+      expect(body.message).toContain(aMdb);
+      expect(body.message).toContain(bMdb);
+      expect(digest(aMdb), "library a untouched").toBe(beforeA);
+      expect(digest(bMdb), "library b untouched").toBe(beforeB);
+    });
+  }
+
+  it("writes into exactly the library an exact path names, even the one scanned second", async () => {
+    const client = await writeServer([aRoot, bRoot]);
+    const beforeA = digest(aMdb);
+    const beforeB = entryCount(bMdb);
+    const r = await client.callTool({
+      name: "add_tracks_to_playlist",
+      arguments: { playlist_id: 1, track_ids: [5], library: bMdb },
+    });
+    const body = r.structuredContent as any;
+    expect(body.error, `refused with: ${body.message}`).toBeUndefined();
+    expect(body.library.path).toBe(bMdb);
+    expect(entryCount(bMdb), "the named library got the track").toBe(beforeB + 1);
+    expect(digest(aMdb), "the other copy was never touched").toBe(beforeA);
+  });
+
+  it("tells a model up front that a copy's shared uuid needs the path instead", async () => {
+    // Before the call, not only in the refusal: a model that knows a uuid may
+    // name two drives passes the path the first time.
+    const client = await writeServer([aRoot, bRoot]);
+    const { tools } = await client.listTools();
+    const writes = tools.filter((t) => t.annotations?.readOnlyHint === false).map((t) => t.name).sort();
+    expect(writes).toEqual([
+      "add_tracks_to_playlist",
+      "create_playlist",
+      "remove_tracks_from_playlist",
+      "reorder_playlist",
+      "update_track_metadata",
+    ]);
+    for (const name of writes) {
+      const tool = tools.find((t) => t.name === name)!;
+      expect(String(tool.description), name).toContain("keeps its uuid");
+      const arg = (tool.inputSchema.properties as any).library.description as string;
+      expect(arg, `${name}: library argument`).toContain("keeps its uuid");
+    }
+
+    // The refusal for an omitted `library` lists uuids next to paths; with two
+    // copies those uuids are identical, so it must steer to the path.
+    const r = await client.callTool({ name: "add_tracks_to_playlist", arguments: { playlist_id: 1, track_ids: [7] } });
+    const body = r.structuredContent as any;
+    expect(body.error).toBe("ambiguous_library");
+    expect(body.message).toContain("set to that library's path");
+  });
+
+  it("sees a copy plugged in after startup before resolving the uuid", async () => {
+    // At startup only a is there, so the uuid is unique and a stays cached.
+    // Resolving against that cache after the copy arrives would still find
+    // exactly one library -- the wrong answer, and the one a write would act on.
+    const late = join(root, "late");
+    mkdirSync(late);
+    const client = await writeServer([aRoot, late]);
+    const lateMdb = makeLibrary(late, { tracks: 20, uuid: SHARED });
+    addPlaylists(lateMdb, [{ id: 1, title: "Set", nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] }]);
+
+    const beforeA = digest(aMdb);
+    const beforeLate = digest(lateMdb);
+    const r = await client.callTool({
+      name: "add_tracks_to_playlist",
+      arguments: { playlist_id: 1, track_ids: [6], library: SHARED },
+    });
+    const body = r.structuredContent as any;
+    expect(body.error, `went through into ${body.library?.path}`).toBe("ambiguous_library");
+    expect(body.message).toContain(lateMdb);
+    expect(digest(aMdb)).toBe(beforeA);
+    expect(digest(lateMdb)).toBe(beforeLate);
+    rmSync(late, { recursive: true, force: true });
   });
 });
