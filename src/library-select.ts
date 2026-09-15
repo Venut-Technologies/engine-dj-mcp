@@ -100,7 +100,9 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
       `Nothing was written. ASK which one to write to, then retry with \`library\` set to that ` +
       `library's path -- do not choose for them. A copy keeps its uuid, so a uuid may name more ` +
       `than one of these. They are usually a USB drive and its copy on the computer, ` +
-      `and one of them may be the drive they perform from.`,
+      `and one of them may be the drive they perform from. A read without \`library\` may have ` +
+      `come from the other one, so re-read anything the write depends on (positions, current ` +
+      `values) from the chosen library first.`,
     { detail: "not_committed" },
   );
 }
@@ -120,18 +122,19 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
  * A path match is exact on the m.db file, not a prefix: a value that merely
  * *contains* a library path must not select it.
  *
- * A uuid shared by several libraries resolves to the first in root-scan
- * order. That is fine for a read -- the libraries are copies of each other --
- * and never for a write: see namedWriteLibrary.
+ * A uuid shared by several libraries resolves to whichever this server found
+ * first -- root-scan order at startup, arrival order for a drive plugged in
+ * later. That is tolerable for a read, which changes no disk, and never for a
+ * write: see namedWriteLibrary.
  */
 export function findLibrary(libs: readonly LibraryInfo[], requested: string): LibraryInfo | null {
   return findLibraries(libs, requested)[0] ?? null;
 }
 
 /**
- * Every library a `library` value names, in root-scan order. More than one
- * only for a uuid: copying an Engine Library folder onto another drive copies
- * its uuid with it, while a path is unique by construction.
+ * Every library a `library` value names, in the order this server found them.
+ * More than one only for a uuid: copying an Engine Library folder onto another
+ * drive copies its uuid with it, while each library's path is its own.
  */
 export function findLibraries(libs: readonly LibraryInfo[], requested: string): LibraryInfo[] {
   const wanted = requested.trim();
@@ -151,14 +154,18 @@ export function findLibraries(libs: readonly LibraryInfo[], requested: string): 
  * The one library a write names, or the refusal.
  *
  * findLibrary would hand back the first of two libraries sharing a uuid, and
- * which is first is only root-scan order -- the very thing ambiguousLibrary
+ * which is first is only discovery order -- the very thing ambiguousLibrary
  * exists so that a write does not rest on. A named uuid is no better an answer
  * than an omitted `library` when it names both a USB drive and its copy.
  */
 export function namedWriteLibrary(libs: readonly LibraryInfo[], requested: string): LibraryInfo | EngineError {
   const matches = findLibraries(libs, requested);
   if (matches.length > 1) return sharedUuid(requested, matches);
-  return matches[0] ?? libraryNotFound(requested, libs);
+  if (matches[0]) return matches[0];
+  // The same refusal a read gets, with its list moved into `message`: on a
+  // write `detail` is reserved, for the reason given at ambiguousLibrary.
+  const miss = libraryNotFound(requested, libs);
+  return { ...miss, message: `${miss.message}. ${miss.detail}`, detail: "not_committed" };
 }
 
 /**
@@ -173,7 +180,8 @@ function sharedUuid(requested: string, matches: readonly LibraryInfo[]): EngineE
     `"${requested.trim()}" names more than one connected library -- a library copied onto another ` +
       `drive keeps its uuid: ${list}. Nothing was written. ASK which one to write to, then retry ` +
       `with \`library\` set to that one's path -- do not choose for them. One of them may be the ` +
-      `drive they perform from.`,
+      `drive they perform from. A read naming this uuid may have come from the other copy, so ` +
+      `re-read anything the write depends on (positions, current values) from that path first.`,
     { detail: "not_committed" },
   );
 }

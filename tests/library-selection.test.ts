@@ -197,8 +197,19 @@ describe("a named library for a write", () => {
     expect(namedWriteLibrary([first, other, clone], other.uuid)).toBe(other);
   });
 
-  it("reports a value that names nothing as library_not_found", () => {
-    expect((namedWriteLibrary([first, clone], "typo") as EngineError).error).toBe("library_not_found");
+  it("reports a value that names nothing as library_not_found, keeping detail to the write contract", () => {
+    // On a write `detail` is exactly "not_committed" or "committed_unverified";
+    // the list of what is selectable belongs in `message`, as ambiguousLibrary does.
+    const e = namedWriteLibrary([first, other], "typo") as EngineError;
+    expect(e.error).toBe("library_not_found");
+    expect(e.detail).toBe("not_committed");
+    expect(e.message).toContain("typo");
+    expect(e.message).toContain(other.uuid);
+  });
+
+  it("tells the caller to re-read from the chosen path, since a read by the uuid may have used the other copy", () => {
+    expect((namedWriteLibrary([first, clone], shared) as EngineError).message).toContain("re-read");
+    expect(ambiguousLibrary([first, clone]).message).toContain("re-read");
   });
 });
 
@@ -970,10 +981,32 @@ describe("a write naming a uuid two connected libraries share", () => {
     expect(libs.filter((l) => l.uuid === SHARED).map((l) => l.path)).toEqual([aMdb, bMdb]);
   });
 
-  for (const [tool, args] of [
+  // Every write tool, not a sample: each handler picks its own resolver, and a
+  // destructive one quietly switched to the read resolver would edit whichever
+  // copy comes first.
+  const WRITES = [
+    ["create_playlist", { title: "Zzz Shared Uuid Set", track_ids: [1] }],
     ["add_tracks_to_playlist", { playlist_id: 1, track_ids: [5] }],
+    ["remove_tracks_from_playlist", { playlist_id: 1, positions: [1] }],
+    ["reorder_playlist", { playlist_id: 1, order: [1] }],
     ["update_track_metadata", { updates: [{ id: 1, genre: "Zzz Shared Uuid" }] }],
-  ] as const) {
+  ] as const;
+
+  for (const [tool, args] of WRITES) {
+    it(`${tool} refuses with no library named, and changes neither database`, async () => {
+      const client = await writeServer([aRoot, bRoot]);
+      const beforeA = digest(aMdb);
+      const beforeB = digest(bMdb);
+      const r = await client.callTool({ name: tool, arguments: { ...args } });
+      const body = r.structuredContent as any;
+      expect(body.error, `went through into ${body.library?.path}`).toBe("ambiguous_library");
+      expect(body.detail).toBe("not_committed");
+      expect(digest(aMdb), "library a untouched").toBe(beforeA);
+      expect(digest(bMdb), "library b untouched").toBe(beforeB);
+    });
+  }
+
+  for (const [tool, args] of WRITES) {
     it(`${tool} refuses the shared uuid, naming both paths, and changes neither database`, async () => {
       const client = await writeServer([aRoot, bRoot]);
       const beforeA = digest(aMdb);
@@ -1030,6 +1063,42 @@ describe("a write naming a uuid two connected libraries share", () => {
     const body = r.structuredContent as any;
     expect(body.error).toBe("ambiguous_library");
     expect(body.message).toContain("set to that library's path");
+  });
+
+  it("still lets a read name the shared uuid: a read changes no disk", async () => {
+    const client = await writeServer([aRoot, bRoot]);
+    const r = await client.callTool({ name: "search_tracks", arguments: { limit: 1, library: SHARED } });
+    const body = r.structuredContent as any;
+    expect(body.error, `read refused: ${body.message}`).toBeUndefined();
+    expect(body.tracks.length).toBe(1);
+  });
+
+  it("refuses a uuid whose library was swapped out at the same path, rather than writing to the new one", async () => {
+    // Same mount point, different library: a stick swapped for another one
+    // carrying the same volume label. The cache still maps the path to the old
+    // uuid; resolving against it would write into the library now there.
+    const swap = join(root, "swap");
+    mkdirSync(swap);
+    const OLD = "c0c0c0c0-1111-4111-8111-c0c0c0c0c0c0";
+    const NEW = "d0d0d0d0-2222-4222-8222-d0d0d0d0d0d0";
+    makeLibrary(swap, { tracks: 20, uuid: OLD });
+    const client = await writeServer([swap]);
+    const listed = await client.callTool({ name: "list_libraries", arguments: {} });
+    expect(((listed.structuredContent as any).libraries as { uuid: string }[]).map((l) => l.uuid)).toEqual([OLD]);
+
+    rmSync(join(swap, "Engine Library"), { recursive: true, force: true });
+    const swapMdb = makeLibrary(swap, { tracks: 20, uuid: NEW });
+    addPlaylists(swapMdb, [{ id: 1, title: "Set", nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] }]);
+    const before = digest(swapMdb);
+    const r = await client.callTool({
+      name: "add_tracks_to_playlist",
+      arguments: { playlist_id: 1, track_ids: [5], library: OLD },
+    });
+    const body = r.structuredContent as any;
+    expect(body.error, `went through into ${body.library?.path}`).toBe("library_not_found");
+    expect(body.detail).toBe("not_committed");
+    expect(digest(swapMdb)).toBe(before);
+    rmSync(swap, { recursive: true, force: true });
   });
 
   it("sees a copy plugged in after startup before resolving the uuid", async () => {

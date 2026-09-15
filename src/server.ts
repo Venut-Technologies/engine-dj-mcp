@@ -376,8 +376,8 @@ export async function createServer(
    * connected libraries share. Copying an Engine Library folder onto another
    * drive copies its uuid, and resolving that uuid to the first match is the
    * same root-scan pick as the omitted case, just reached by a caller who had
-   * no way to know it was ambiguous. namedWriteLibrary refuses it; a path
-   * always names one.
+   * no way to know it was ambiguous. namedWriteLibrary refuses it and asks
+   * for the path, which tells the copies apart.
    *
    * Rescans first, in both cases, because `knownList()` is a cache that
    * deliberately keeps a library a later scan cannot see -- so a momentarily
@@ -389,10 +389,16 @@ export async function createServer(
    * also lets a drive plugged in mid-session be seen at all -- including a
    * copy that makes a named uuid ambiguous.
    *
-   * The cost is one filesystem probe per write, against a write that is about
-   * to copy the entire database for its pre-write snapshot. Reads are left
-   * alone: they run far more often and a stale pick between two copies is not
-   * worth a probe apiece.
+   * A copy that has never once been readable since startup -- a hot journal,
+   * no permission -- is still not counted: its uuid was never read, so there
+   * is nothing to match. rescanLibraries keeps only libraries it has read.
+   *
+   * The cost is one discovery scan per write: every candidate library under
+   * the roots is opened read-only and its header and track count read, the
+   * same scan list_libraries runs. That is small against a write that is
+   * about to copy the entire database for its pre-write snapshot. Reads are
+   * left alone: they run far more often and a stale pick between two copies
+   * is not worth a scan apiece.
    */
   const selectForWrite = (requested?: string): LibraryInfo | EngineError => {
     rescanLibraries();
