@@ -374,9 +374,9 @@ export async function createServer(
    *
    * A named library is taken as named -- unless the name is a uuid two
    * connected libraries share. Copying an Engine Library folder onto another
-   * drive copies its uuid, and resolving that uuid to the first match is the
-   * same root-scan pick as the omitted case, just reached by a caller who had
-   * no way to know it was ambiguous. namedWriteLibrary refuses it and asks
+   * drive copies its uuid, and resolving that uuid to the first match would
+   * be the same order-of-discovery pick the omitted case refuses, reached by
+   * a caller who had no way to know it was ambiguous. namedWriteLibrary refuses it and asks
    * for the path, which tells the copies apart.
    *
    * Rescans first, in both cases, because `knownList()` is a cache that

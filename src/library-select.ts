@@ -101,8 +101,8 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
       `library's path -- do not choose for them. A copy keeps its uuid, so a uuid may name more ` +
       `than one of these. They are usually a USB drive and its copy on the computer, ` +
       `and one of them may be the drive they perform from. A read without \`library\` may have ` +
-      `come from the other one, so re-read anything the write depends on (positions, current ` +
-      `values) from the chosen library first.`,
+      `come from a different one of these, so re-read anything the write depends on (track and ` +
+      `playlist ids, positions, current values) from the chosen library first.`,
     { detail: "not_committed" },
   );
 }
@@ -122,17 +122,18 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
  * A path match is exact on the m.db file, not a prefix: a value that merely
  * *contains* a library path must not select it.
  *
- * A uuid shared by several libraries resolves to whichever this server found
- * first -- root-scan order at startup, arrival order for a drive plugged in
- * later. That is tolerable for a read, which changes no disk, and never for a
- * write: see namedWriteLibrary.
+ * A uuid shared by several libraries resolves to the first of them in this
+ * server's list of known libraries -- root-scan order at startup, arrival
+ * order for a drive plugged in later, but no order a caller can rely on. That
+ * is tolerable for a read, which changes no disk, and never for a write: see
+ * namedWriteLibrary.
  */
 export function findLibrary(libs: readonly LibraryInfo[], requested: string): LibraryInfo | null {
   return findLibraries(libs, requested)[0] ?? null;
 }
 
 /**
- * Every library a `library` value names, in the order this server found them.
+ * Every library a `library` value names, in the order of `libs`.
  * More than one only for a uuid: copying an Engine Library folder onto another
  * drive copies its uuid with it, while each library's path is its own.
  */
@@ -180,8 +181,9 @@ function sharedUuid(requested: string, matches: readonly LibraryInfo[]): EngineE
     `"${requested.trim()}" names more than one connected library -- a library copied onto another ` +
       `drive keeps its uuid: ${list}. Nothing was written. ASK which one to write to, then retry ` +
       `with \`library\` set to that one's path -- do not choose for them. One of them may be the ` +
-      `drive they perform from. A read naming this uuid may have come from the other copy, so ` +
-      `re-read anything the write depends on (positions, current values) from that path first.`,
+      `drive they perform from. A read naming this uuid may have come from another of these copies, ` +
+      `so re-read anything the write depends on (track and playlist ids, positions, current values) ` +
+      `from that path first.`,
     { detail: "not_committed" },
   );
 }
