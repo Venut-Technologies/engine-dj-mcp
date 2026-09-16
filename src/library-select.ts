@@ -20,7 +20,9 @@ export const LIBRARY_ARG_DESCRIPTION =
   "the supported library holding the most tracks. A READ may always omit it. A WRITE " +
   "may omit it only when a single supported library is connected: with two or more, a " +
   "write refuses with ambiguous_library listing them, since the choice decides which " +
-  "disk changes; ask the user which, then pass it here.";
+  "disk changes; ask the user which, then pass it here. A library copied onto another drive " +
+  "keeps its uuid, so a uuid can name two connected libraries: a write naming such a uuid " +
+  "refuses with ambiguous_library as well. Pass the path to write to one of them.";
 
 export const LibraryArg = z.string().min(1).optional().describe(LIBRARY_ARG_DESCRIPTION);
 
@@ -95,9 +97,12 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
   return err(
     "ambiguous_library",
     `More than one library is connected, so there is no default to write to: ${list}. ` +
-      `Nothing was written. ASK which one to write to, then retry with \`library\` set -- ` +
-      `do not choose for them. These are usually a USB drive and its copy on the computer, ` +
-      `and one of them may be the drive they perform from.`,
+      `Nothing was written. ASK which one to write to, then retry with \`library\` set to that ` +
+      `library's path -- do not choose for them. A copy keeps its uuid, so a uuid may name more ` +
+      `than one of these. They are usually a USB drive and its copy on the computer, ` +
+      `and one of them may be the drive they perform from. A read without \`library\` may have ` +
+      `come from a different one of these, so re-read anything the write depends on (track and ` +
+      `playlist ids, positions, current values) from the chosen library first.`,
     { detail: "not_committed" },
   );
 }
@@ -116,19 +121,71 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
  *
  * A path match is exact on the m.db file, not a prefix: a value that merely
  * *contains* a library path must not select it.
+ *
+ * A uuid shared by several libraries resolves to the first of them in this
+ * server's list of known libraries -- root-scan order at startup, arrival
+ * order for a drive plugged in later, but no order a caller can rely on. That
+ * is tolerable for a read, which changes no disk, and never for a write: see
+ * namedWriteLibrary.
  */
 export function findLibrary(libs: readonly LibraryInfo[], requested: string): LibraryInfo | null {
-  const wanted = requested.trim();
-  if (!wanted) return null;
+  return findLibraries(libs, requested)[0] ?? null;
+}
 
-  const byUuid = libs.find((l) => l.uuid && l.uuid.toLowerCase() === wanted.toLowerCase());
-  if (byUuid) return byUuid;
+/**
+ * Every library a `library` value names, in the order of `libs`.
+ * More than one only for a uuid: copying an Engine Library folder onto another
+ * drive copies its uuid with it, while each library's path is its own.
+ */
+export function findLibraries(libs: readonly LibraryInfo[], requested: string): LibraryInfo[] {
+  const wanted = requested.trim();
+  if (!wanted) return [];
+
+  const byUuid = libs.filter((l) => l.uuid && l.uuid.toLowerCase() === wanted.toLowerCase());
+  if (byUuid.length > 0) return byUuid;
 
   // resolve() turns a relative value into something rooted at the process
   // cwd, which matches no library path -- exactly the intended outcome for
   // a value that is neither a uuid nor a real path.
   const wantedPath = resolve(expandHome(wanted));
-  return libs.find((l) => resolve(l.path) === wantedPath) ?? null;
+  return libs.filter((l) => resolve(l.path) === wantedPath);
+}
+
+/**
+ * The one library a write names, or the refusal.
+ *
+ * findLibrary would hand back the first of two libraries sharing a uuid, and
+ * which is first is only discovery order -- the very thing ambiguousLibrary
+ * exists so that a write does not rest on. A named uuid is no better an answer
+ * than an omitted `library` when it names both a USB drive and its copy.
+ */
+export function namedWriteLibrary(libs: readonly LibraryInfo[], requested: string): LibraryInfo | EngineError {
+  const matches = findLibraries(libs, requested);
+  if (matches.length > 1) return sharedUuid(requested, matches);
+  if (matches[0]) return matches[0];
+  // The same refusal a read gets, with its list moved into `message`: on a
+  // write `detail` is reserved, for the reason given at ambiguousLibrary.
+  const miss = libraryNotFound(requested, libs);
+  return { ...miss, message: `${miss.message}. ${miss.detail}`, detail: "not_committed" };
+}
+
+/**
+ * The refusal for a uuid naming more than one library. Lists paths, since the
+ * uuid is the one thing the candidates do not differ in; `detail` stays
+ * exactly "not_committed" for the reason given at ambiguousLibrary.
+ */
+function sharedUuid(requested: string, matches: readonly LibraryInfo[]): EngineError {
+  const list = matches.map((l) => `${redactPath(l.path)} (${l.trackCount} tracks)`).join("; ");
+  return err(
+    "ambiguous_library",
+    `"${requested.trim()}" names more than one connected library -- a library copied onto another ` +
+      `drive keeps its uuid: ${list}. Nothing was written. ASK which one to write to, then retry ` +
+      `with \`library\` set to that one's path -- do not choose for them. One of them may be the ` +
+      `drive they perform from. A read naming this uuid may have come from another of these copies, ` +
+      `so re-read anything the write depends on (track and playlist ids, positions, current values) ` +
+      `from that path first.`,
+    { detail: "not_committed" },
+  );
 }
 
 /**
