@@ -1,6 +1,6 @@
 # engine-dj-mcp
 
-[![CI](https://github.com/Venut-Labs/engine-dj-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Venut-Labs/engine-dj-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/Venut-Technologies/engine-dj-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Venut-Technologies/engine-dj-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/engine-dj-mcp)](https://www.npmjs.com/package/engine-dj-mcp)
 [![licence](https://img.shields.io/npm/l/engine-dj-mcp)](./LICENSE)
 

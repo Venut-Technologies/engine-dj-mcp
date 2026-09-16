@@ -19,11 +19,11 @@
   "author": "Mikhail Chereshnev <venuttv@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Venut-Labs/engine-dj-mcp.git"
+    "url": "git+https://github.com/Venut-Technologies/engine-dj-mcp.git"
   },
-  "homepage": "https://github.com/Venut-Labs/engine-dj-mcp#readme",
+  "homepage": "https://github.com/Venut-Technologies/engine-dj-mcp#readme",
   "bugs": {
-    "url": "https://github.com/Venut-Labs/engine-dj-mcp/issues"
+    "url": "https://github.com/Venut-Technologies/engine-dj-mcp/issues"
   },
   "type": "module",
   "engines": {
