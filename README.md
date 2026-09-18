@@ -4,6 +4,10 @@
 [![npm](https://img.shields.io/npm/v/engine-dj-mcp)](https://www.npmjs.com/package/engine-dj-mcp)
 [![licence](https://img.shields.io/npm/l/engine-dj-mcp)](./LICENSE)
 
+**Status: Active · Pre-1.0.** In regular use and maintained; before 1.0 a MINOR
+release may change behaviour, a PATCH never does. Changes are recorded in
+[CHANGELOG.md](./CHANGELOG.md).
+
 An MCP server that gives an AI assistant your **Engine DJ** libraries — the
 one on your computer and the ones on your USB drives. It searches and audits
 them, reads the cues and beatgrids Engine stored, and builds playlists when
@@ -69,11 +73,19 @@ flag in 22.13, but the pre-write snapshot uses its `backup()`, added in
 there are no native dependencies), and an Engine DJ library at schema 3.0.0
 through 3.0.2 — Engine DJ 4.5 and 5.x.
 
+Both floors are measured, not assumed. CI runs the full suite on Node 22.16 and
+24, on macOS and Ubuntu, so the Node floor is the version the tests actually
+pass on. On the Engine DJ side, everything here has been exercised against a
+real **schema 3.0.2** library on macOS; 3.0.0 and 3.0.1 are accepted by the
+version check and covered by generated fixtures, but no real library at those
+versions has been read. Anything outside the range is listed with its version
+and refused, never read on a guess.
+
 ## Tools
 
-Nine read-only tools, and four that write — `create_playlist`,
-`add_tracks_to_playlist`, `remove_tracks_from_playlist` and
-`reorder_playlist` — that appear only when you start the server with
+Nine read-only tools, and five that write — `create_playlist`,
+`add_tracks_to_playlist`, `remove_tracks_from_playlist`, `reorder_playlist`
+and `update_track_metadata` — that appear only when you start the server with
 `--allow-writes`. Every tool that reads library data also accepts an
 optional `library` argument — see [Choosing a library](#choosing-a-library).
 
