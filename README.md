@@ -487,6 +487,9 @@ does.
 
 ## Safety
 
+The guarantees this server makes about your library are listed in
+[PRINCIPLES.md](./PRINCIPLES.md); this section is how they work.
+
 Your library is opened **read-only at the operating-system level**, not by
 convention and not by a `PRAGMA` a query could turn back off. Writes are
 refused by SQLite itself, and without `--allow-writes` no file is ever
@@ -707,4 +710,5 @@ their version and reported as unsupported rather than read on a guess.
 
 ## Licence
 
-MIT — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](./LICENSE). What this project guarantees and refuses to do:
+[PRINCIPLES.md](./PRINCIPLES.md).

@@ -9,3 +9,8 @@ docs/superpowers/
 
 # local dev MCP wiring — points at ./dist and enables writes; not for anyone else
 .mcp.json
+
+# Agent instructions live in the private governance repository (symlinked, never committed)
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
