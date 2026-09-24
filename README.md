@@ -4,44 +4,58 @@
 [![npm](https://img.shields.io/npm/v/engine-dj-mcp)](https://www.npmjs.com/package/engine-dj-mcp)
 [![licence](https://img.shields.io/npm/l/engine-dj-mcp)](./LICENSE)
 
+Ask Claude, or any AI assistant, about your **Engine DJ** library: find tracks
+by BPM, key, genre or your own comments, check the collection for duplicates,
+missing files and tracks with no cues, read the cues and beatgrids Engine
+stored, and have playlists built or track tags fixed when you ask. It works
+through MCP, the Model Context Protocol, the standard way AI apps such as
+Claude Desktop, Claude Code, Cursor and VS Code connect to tools on your own
+computer: the app starts this server, and the assistant calls it when a
+question needs your library.
+
+It reads the library on your computer and the ones on your USB drives. It
+opens them **read-only at the operating-system level** and changes nothing
+unless you start it with `--allow-writes` — then it can create and edit
+playlists and edit genre, comment, label, year and rating, and it copies the
+whole database to a backup before the first change. See [Safety](#safety).
+The server itself sends nothing anywhere; what your AI app does with its
+answers is covered in [PRIVACY.md](./PRIVACY.md).
+
 **Status: Active · Pre-1.0.** In regular use and maintained; before 1.0 a MINOR
 release may change behaviour, a PATCH never does. Changes are recorded in
 [CHANGELOG.md](./CHANGELOG.md).
-
-An MCP server that gives an AI assistant your **Engine DJ** libraries — the
-one on your computer and the ones on your USB drives. It searches and audits
-them, reads the cues and beatgrids Engine stored, and builds playlists when
-you ask it to.
 
 > **Not affiliated with, endorsed by, or sponsored by inMusic Brands, Denon
 > DJ, or the Engine DJ product.** "Engine DJ" is used here only to name the
 > software whose library this tool reads and writes. No logos or brand
 > artwork from inMusic or Denon DJ are used in this project.
 
-Your library is opened **read-only at the operating-system level**. It is
-never written to unless you start the server with `--allow-writes` — see
-[Safety](#safety).
-
 ## What you can ask
 
 Once connected, these are ordinary questions in chat:
 
 - *"Something dark around 124 in a minor key I haven't played in six months."*
-- *"Which tracks still have no hot cue set?"*
 - *"Find me anything harmonically compatible with 8A between 138 and 142."*
-- *"What's in my ACID Beach playlist, in order?"*
-- *"Anything around 128 in ACID Beach?"*
-- *"What's broken in my collection — missing files, duplicates, bad tempos?"*
+- *"What's broken in my collection — missing files, duplicates, tracks with no cues?"*
 - *"Where are the cue points on this track, and what tempo did Engine analyse?"*
 - *"Build me a playlist of everything in 5A from 140 BPM up."* (needs `--allow-writes`)
+- *"Set the genre of these five tracks to Minimal and rate them four stars."* (needs `--allow-writes`)
 
 ## Install
+
+You need [Node.js](https://nodejs.org) 22.16 or newer. There is nothing else
+to install: every app below starts the server with `npx`, which downloads it
+from npm the first time.
 
 ```bash
 npx engine-dj-mcp
 ```
 
-Claude Desktop — add to your configuration:
+That command is what the apps run; you do not need to run it yourself.
+
+### Claude Desktop
+
+Settings → Developer → Edit Config, and add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -51,9 +65,38 @@ Claude Desktop — add to your configuration:
 }
 ```
 
-To let the assistant create playlists as well, add `--allow-writes` — a flag
-in `args` rather than an environment variable precisely so it is visible in
-the configuration you are reading:
+Restart Claude Desktop.
+
+### Claude Code
+
+```bash
+claude mcp add --scope user engine-dj -- npx -y engine-dj-mcp
+```
+
+### Cursor
+
+[Add to Cursor](https://cursor.com/install-mcp?name=engine-dj&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImVuZ2luZS1kai1tY3AiXX0%3D)
+— or open this deep link directly, or add the same `mcpServers` entry as for
+Claude Desktop to `~/.cursor/mcp.json`:
+
+```text
+cursor://anysphere.cursor-deeplink/mcp/install?name=engine-dj&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImVuZ2luZS1kai1tY3AiXX0%3D
+```
+
+### VS Code
+
+[Add to VS Code](https://vscode.dev/redirect/mcp/install?name=engine-dj&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22engine-dj-mcp%22%5D%7D)
+— or run:
+
+```bash
+code --add-mcp '{"name":"engine-dj","command":"npx","args":["-y","engine-dj-mcp"]}'
+```
+
+### Letting it write
+
+To let the assistant create and edit playlists and edit track tags, add
+`--allow-writes` to `args` — a flag rather than an environment variable
+precisely so it is visible in the configuration you are reading:
 
 ```json
 {
@@ -66,20 +109,27 @@ the configuration you are reading:
 Pin the version in this one. Unpinned, `npx` fetches whatever is newest at
 every launch, and this configuration gives that code write access to your
 library. Pinned, a new release reaches it only when you change the number.
+Quit Engine DJ before asking for a change; see [Writing](#writing).
 
-**Requirements:** Node.js 22.16 or newer (`node:sqlite` stopped needing a
-flag in 22.13, but the pre-write snapshot uses its `backup()`, added in
-22.16;
-there are no native dependencies), and an Engine DJ library at schema 3.0.0
-through 3.0.2 — Engine DJ 4.5 and 5.x.
+## Compatibility
 
-Both floors are measured, not assumed. CI runs the full suite on Node 22.16 and
-24, on macOS and Ubuntu, so the Node floor is the version the tests actually
-pass on. On the Engine DJ side, everything here has been exercised against a
-real **schema 3.0.2** library on macOS; 3.0.0 and 3.0.1 are accepted by the
-version check and covered by generated fixtures, but no real library at those
-versions has been read. Anything outside the range is listed with its version
-and refused, never read on a guess.
+- **macOS: yes.** Every check against a real library has been run on macOS,
+  and it finds libraries where Engine DJ keeps them there: `~/Music` and the
+  top of each drive under `/Volumes`.
+- **Windows and Linux: not supported yet.** The test suite passes on Ubuntu,
+  but no real library has been read on either system. Off macOS the server
+  looks only in `~/Music/Engine Library`, so a library on a USB drive is not
+  found, and there is no option to point it somewhere else.
+- **Node.js 22.16 or newer**, with no native dependencies. `node:sqlite`
+  stopped needing a flag in 22.13, but the pre-write backup uses its
+  `backup()`, added in 22.16. CI runs the full suite on Node 22.16 and 24, on
+  macOS and Ubuntu.
+- **Engine DJ libraries at schema 3.0.0 through 3.0.2** — Engine DJ 4.5 and
+  5.x. Everything here has been exercised against a real **schema 3.0.2**
+  library; 3.0.0 and 3.0.1 are accepted by the version check and covered by
+  generated fixtures, but no real library at those versions has been read.
+  Anything outside the range is listed with its version and refused, never
+  read on a guess.
 
 ## Tools
 
@@ -690,11 +740,15 @@ changes. The track's **main cue** does not count towards it — Engine sets
 that as a playback marker rather than the DJ placing it. `has_beatgrid` does
 still test for the blob: `beatData` has no "written but empty" state.
 
-**It writes nothing but playlists, and only when you ask for it.** Without
-`--allow-writes` the library is opened read-only at the OS level and there is
-no tool that could write. With the flag, the four write tools add, edit and
-reorder playlists — and that is the whole list. Not a cue, not a tag, not a
-rating, and not even the recovery of a journal Engine DJ left behind.
+**It writes playlists and five track fields, and only when you ask for it.**
+Without `--allow-writes` the library is opened read-only at the OS level and
+there is no tool that could write. With the flag, five write tools appear:
+four create playlists and add, remove and reorder their tracks, and
+`update_track_metadata` changes genre, comment, label, year and rating in
+Engine's database — and that is the whole list. Not a cue, a loop or a
+beatgrid; not a title, artist, album, play count or file path; not the tags
+inside your audio files; and not even the recovery of a journal Engine DJ
+left behind.
 
 **It does not read play history.** `Track.timeLastPlayed` answers "what have I
 not played in six months?", but the separate Engine history database —

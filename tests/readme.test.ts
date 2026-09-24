@@ -40,4 +40,39 @@ describe("README", () => {
     expect(readme).toMatch(/five tools appear/);
     expect(readme).toMatch(/no track, cue or beatgrid is touched by these four/);
   });
+
+  it("does not tell a reader that only playlists are ever written", () => {
+    // Limitations said "the four write tools" and "not a tag, not a rating"
+    // for two releases after update_track_metadata began writing both.
+    expect(readme).not.toMatch(/four write tools/i);
+    expect(readme).not.toMatch(/writes nothing but playlists/i);
+    expect(readme).toMatch(/five write tools appear/);
+  });
+
+  it("has install links that decode to the unpinned, read-only npx configuration", () => {
+    // Deep links carry the configuration encoded, where nobody reads it. Decode
+    // every one and compare, so a link cannot quietly carry --allow-writes or
+    // a different package.
+    const want = { command: "npx", args: ["-y", pkg.name] };
+    const cursor = [...readme.matchAll(/(?:cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install|https:\/\/cursor\.com\/install-mcp)\?[^\s)]+/g)];
+    const vscode = [...readme.matchAll(/https:\/\/vscode\.dev\/redirect\/mcp\/install\?[^\s)]+/g)];
+    expect(cursor.length).toBeGreaterThanOrEqual(2);
+    expect(vscode.length).toBeGreaterThanOrEqual(1);
+    for (const [link] of cursor) {
+      const q = new URL(link).searchParams;
+      expect(q.get("name")).toBe("engine-dj");
+      expect(JSON.parse(Buffer.from(q.get("config")!, "base64").toString("utf8"))).toEqual(want);
+    }
+    for (const [link] of vscode) {
+      const q = new URL(link).searchParams;
+      expect(q.get("name")).toBe("engine-dj");
+      expect(JSON.parse(q.get("config")!)).toEqual(want);
+    }
+  });
+
+  it("states which platforms it supports and links the privacy statement", () => {
+    expect(readme).toMatch(/## Compatibility/);
+    expect(readme).toMatch(/Windows and Linux: not supported yet/);
+    expect(readme).toContain("(./PRIVACY.md)");
+  });
 });

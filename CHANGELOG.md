@@ -40,6 +40,19 @@ commit that makes it.
   and `package.json` carries `mcpName`
   (`io.github.Venut-Technologies/engine-dj-mcp`), the name under which the
   official MCP Registry will list it.
+- The README now opens with what a DJ can ask, and has install steps for
+  Claude Desktop, Claude Code, Cursor and VS Code, with one-click install links
+  for the last two. A new Compatibility section says plainly that only macOS
+  is supported: off macOS the server looks only in `~/Music`, so a library on
+  a USB drive is not found.
+- The README links `PRIVACY.md`.
+
+### Fixed
+
+- The README's Limitations still said the server writes nothing but playlists
+  and has four write tools — "not a tag, not a rating". Since 0.17.0 there are
+  five: `update_track_metadata` writes genre, comment, label, year and rating.
+  It now says so, and lists what is still never written.
 
 ## [0.17.1] - 2026-09-16
 
