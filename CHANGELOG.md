@@ -29,6 +29,10 @@ commit that makes it.
   network service. Together with the title and the read-only, destructive and
   idempotent hints each tool already carried, a client or catalog can see what
   every tool does before it is called; a test now checks the full set.
+- The npm description and keywords now say what a DJ can do with the server,
+  and `package.json` carries `mcpName`
+  (`io.github.Venut-Technologies/engine-dj-mcp`), the name under which the
+  official MCP Registry will list it.
 
 ## [0.17.1] - 2026-09-16
 
