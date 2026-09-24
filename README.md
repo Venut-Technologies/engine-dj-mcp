@@ -101,7 +101,7 @@ precisely so it is visible in the configuration you are reading:
 ```json
 {
   "mcpServers": {
-    "engine-dj": { "command": "npx", "args": ["-y", "engine-dj-mcp@0.17.1", "--allow-writes"] }
+    "engine-dj": { "command": "npx", "args": ["-y", "engine-dj-mcp@0.17.2", "--allow-writes"] }
   }
 }
 ```

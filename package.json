@@ -1,6 +1,6 @@
 {
   "name": "engine-dj-mcp",
-  "version": "0.17.1",
+  "version": "0.17.2",
   "mcpName": "io.github.Venut-Technologies/engine-dj-mcp",
   "description": "Ask an AI assistant about your Engine DJ library: find tracks by BPM, key, genre or comment, audit duplicates and missing files, read cues and beatgrids, and, only once you turn writes on, build playlists and edit genre, comment, label, year or rating, with a backup taken first. Not affiliated with inMusic or Denon DJ.",
   "keywords": [
