@@ -9,6 +9,15 @@
     "id": "1340133256"
   },
   "websiteUrl": "https://github.com/Venut-Technologies/engine-dj-mcp#readme",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/Venut-Technologies/engine-dj-mcp/main/assets/icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
   "version": "0.17.1",
   "packages": [
     {
@@ -25,7 +34,9 @@
           "type": "positional",
           "valueHint": "allow_writes",
           "description": "Optional, off by default. The literal flag --allow-writes adds the five write tools (create and edit playlists; edit genre, comment, label, year and rating), with a full database backup before the first write of a session. Leave it out and the library is opened read-only and no write tool exists.",
-          "choices": ["--allow-writes"],
+          "choices": [
+            "--allow-writes"
+          ],
           "isRequired": false
         }
       ]
