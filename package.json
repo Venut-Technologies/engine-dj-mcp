@@ -24,7 +24,7 @@
     "beatgrid"
   ],
   "license": "MIT",
-  "author": "Mikhail Chereshnev <venuttv@gmail.com>",
+  "author": "Mikhail Chereshnev",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Venut-Technologies/engine-dj-mcp.git"
