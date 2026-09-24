@@ -25,6 +25,10 @@ commit that makes it.
 
 - The README states the project's status and the minimum Node and Engine DJ
   versions it has been checked against.
+- Every tool now also declares `openWorldHint: false`: none of them reaches a
+  network service. Together with the title and the read-only, destructive and
+  idempotent hints each tool already carried, a client or catalog can see what
+  every tool does before it is called; a test now checks the full set.
 
 ## [0.17.1] - 2026-09-16
 

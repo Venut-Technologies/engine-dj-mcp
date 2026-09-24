@@ -43,7 +43,12 @@ import {
 import { UpdateTrackMetadataInput, runUpdateTrackMetadata } from "./tools/write-track-metadata.js";
 import { err, isEngineError, libraryNeedsRecovery, type EngineError } from "./errors.js";
 
-const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true } as const;
+/**
+ * Every tool here works on files on this machine -- the Engine library, the
+ * sidecar index and the backups beside it -- and none reaches a network
+ * service, so each one says so: `openWorldHint: false` on all four sets.
+ */
+const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 /**
  * A write that only ever *adds*. `destructiveHint: false` is a claim with a
  * defined meaning in MCP -- "this tool performs only additive updates" -- and
@@ -51,20 +56,20 @@ const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true } 
  * create_playlist (a new playlist, nothing else touched) and of
  * add_tracks_to_playlist (new entries, existing ones left where they are).
  */
-const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false } as const;
+const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 /**
  * A write that can destroy or reorganise what is already there:
  * remove_tracks_from_playlist deletes entries, reorder_playlist rewrites the
  * order of a list a DJ may be playing from live. Advertising either as
  * additive told a client it need not ask before calling.
  */
-const RW_DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false } as const;
+const RW_DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
 /**
  * A write that overwrites or clears what is there -- so destructive -- but
  * that a repeat of the same call leaves alone: a track already holding the
  * requested values is not written again. update_track_metadata.
  */
-const RW_OVERWRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true } as const;
+const RW_OVERWRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false } as const;
 
 /**
  * name/version reported to every client on initialize. Read from
