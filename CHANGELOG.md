@@ -27,6 +27,8 @@ commit that makes it.
   release workflow and with GitHub's OIDC token, once npm has the version.
 - `PRIVACY.md`: what the server reads, what it writes and where, and that it
   makes no network connections and has no telemetry.
+- A Claude Code plugin manifest (`.claude-plugin/plugin.json`) that starts the
+  server with `npx -y engine-dj-mcp`, read-only.
 
 ### Changed
 

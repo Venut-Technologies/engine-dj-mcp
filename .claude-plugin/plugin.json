@@ -1,0 +1,19 @@
+{
+  "name": "engine-dj",
+  "displayName": "Engine DJ library",
+  "description": "Ask Claude about your Engine DJ library: find tracks by BPM, key, genre or comment, audit duplicates and missing files, and read cues and beatgrids. Read-only; the library is never written to from this plugin. Not affiliated with inMusic or Denon DJ.",
+  "author": {
+    "name": "Venut Technologies",
+    "url": "https://github.com/Venut-Technologies"
+  },
+  "homepage": "https://github.com/Venut-Technologies/engine-dj-mcp#readme",
+  "repository": "https://github.com/Venut-Technologies/engine-dj-mcp",
+  "license": "MIT",
+  "keywords": ["dj", "engine-dj", "dj-library", "harmonic-mixing", "camelot", "playlist", "duplicates"],
+  "mcpServers": {
+    "engine-dj": {
+      "command": "npx",
+      "args": ["-y", "engine-dj-mcp"]
+    }
+  }
+}
