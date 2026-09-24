@@ -25,6 +25,8 @@ commit that makes it.
   test keeps its version and name in step with `package.json`.
 - Each release is also published to the official MCP Registry, from the
   release workflow and with GitHub's OIDC token, once npm has the version.
+- `PRIVACY.md`: what the server reads, what it writes and where, and that it
+  makes no network connections and has no telemetry.
 
 ### Changed
 
