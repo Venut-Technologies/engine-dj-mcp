@@ -23,6 +23,8 @@ commit that makes it.
 - `server.json`, the entry for the official MCP Registry: the npm package, run
   over stdio, and the optional `--allow-writes` flag described as it works. A
   test keeps its version and name in step with `package.json`.
+- Each release is also published to the official MCP Registry, from the
+  release workflow and with GitHub's OIDC token, once npm has the version.
 
 ### Changed
 
