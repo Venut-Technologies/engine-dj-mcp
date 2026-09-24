@@ -20,6 +20,9 @@ commit that makes it.
 - This changelog, and a tag-driven release workflow: pushing a `vX.Y.Z` tag runs
   the full suite on the tagged commit, creates the GitHub Release from the
   changelog entry, and publishes to npm with provenance.
+- `server.json`, the entry for the official MCP Registry: the npm package, run
+  over stdio, and the optional `--allow-writes` flag described as it works. A
+  test keeps its version and name in step with `package.json`.
 
 ### Changed
 
