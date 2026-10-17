@@ -65,6 +65,17 @@ jobs:
             echo "tag $GITHUB_REF_NAME says $tag, package.json says $pkg"
             exit 1
           fi
+          # The other manifests that carry the version: server.json for the
+          # MCP Registry, gemini-extension.json for the Gemini CLI gallery.
+          # The test suite checks them against package.json on every push;
+          # this is the same check at the one moment it must not be skipped.
+          for manifest in server.json gemini-extension.json; do
+            have="$(node -p "require('./$manifest').version")"
+            if [ "$tag" != "$have" ]; then
+              echo "tag $GITHUB_REF_NAME says $tag, $manifest says $have"
+              exit 1
+            fi
+          done
           echo "version=$tag" >> "$GITHUB_OUTPUT"
 
       # The same suite CI runs on every push, once more on the tagged commit.

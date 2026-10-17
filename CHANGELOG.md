@@ -12,6 +12,47 @@ commit that makes it.
 
 ## [Unreleased]
 
+### Added
+
+- Every write tool takes `expect_library_uuid`: a check, not a selector. If the
+  library chosen for the write reports another uuid, the call is refused with
+  `library_not_found` and nothing is written. Every undo step now carries it
+  next to the path it already carried, so an undo replayed after two drives
+  with the same volume label have swapped mount points is refused instead of
+  landing on the other drive — where, for a playlist edit Engine DJ has
+  already copied across, `expect_track_ids` would have agreed. ([#16])
+- `gemini-extension.json`, so the server can be installed as a Gemini CLI
+  extension (`gemini extensions install
+  https://github.com/Venut-Technologies/engine-dj-mcp`) and listed in the
+  Gemini CLI extensions gallery. It starts the same read-only server as every
+  other install path; a test keeps its version in step with `package.json`,
+  and the release workflow refuses a tag that disagrees with it. ([#19])
+
+### Changed
+
+- On every error a write tool returns, `detail` is now exactly `not_committed`
+  or `committed_unverified`, as the tool descriptions always promised. Refusals
+  raised before the write began — an unsupported schema, no library connected,
+  a `playlist_name` matching several playlists — used to carry prose or
+  nothing there; the prose now goes in `message`. ([#17])
+- A write naming a uuid that a supported library shares with a copy whose
+  schema is unsupported now goes to the supported library, the same choice an
+  omitted `library` already made, instead of refusing with a choice one half of
+  which could never be written. A uuid held only by unsupported copies refuses
+  with `unsupported_schema`; naming the unsupported copy's own path still does.
+  ([#18])
+- The `unsupported_schema` message names the library's path and the supported
+  versions; it has one source for every tool.
+
+### Fixed
+
+- The server noticed a different library at a path it had already used — a
+  drive swapped for another with the same volume label, or an `Engine Library`
+  folder replaced in place — only partly: the write went to the file now at
+  that path, but the result's `library.uuid`, the backup filename and the
+  query connection and index serving reads still belonged to the library that
+  used to be there. It now starts over for that path. ([#15])
+
 ## [0.17.2] - 2026-09-25
 
 ### Added
@@ -259,6 +300,11 @@ commit that makes it.
 
 [#12]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/12
 [#14]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/14
+[#15]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/15
+[#16]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/16
+[#17]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/17
+[#18]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/18
+[#19]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/19
 [Unreleased]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.2...HEAD
 [0.17.2]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.1...v0.17.2
 [0.17.1]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.0...v0.17.1

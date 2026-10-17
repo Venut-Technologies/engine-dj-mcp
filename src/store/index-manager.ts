@@ -6,7 +6,7 @@ import { buildSidecar } from "../sidecar/build.js";
 import { SIDECAR_FORMAT } from "../sidecar/schema.js";
 import { sidecarDir } from "../paths.js";
 import { err, type EngineError } from "../errors.js";
-import type { LibraryInfo } from "../discovery.js";
+import { unsupportedSchema, type LibraryInfo } from "../discovery.js";
 import type { QueryProcess } from "../proc/query-client.js";
 
 export interface FreshResult {
@@ -118,11 +118,7 @@ export class IndexManager {
   }
 
   async ensureFresh(): Promise<FreshResult | EngineError> {
-    if (!this.lib.supported) {
-      return err("unsupported_schema", `Schema ${this.lib.schema.join(".")} is not supported`, {
-        detail: "Supported versions are 3.0.0, 3.0.1 and 3.0.2",
-      });
-    }
+    if (!this.lib.supported) return unsupportedSchema(this.lib);
 
     let current: number;
     try {

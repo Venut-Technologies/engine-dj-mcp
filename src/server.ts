@@ -3,11 +3,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { discoverLibraries, defaultRoots, probeLibraries, type LibraryInfo } from "./discovery.js";
+import {
+  discoverLibraries,
+  defaultRoots,
+  probeLibraries,
+  unsupportedSchema,
+  type LibraryInfo,
+} from "./discovery.js";
 import { libraryCandidates, libraryTag, sidecarDir } from "./paths.js";
 import {
   LibraryArg,
+  ExpectLibraryUuidArg,
   ambiguousLibrary,
+  expectedLibrary,
   writeNeedsLibrary,
   findLibrary,
   namedWriteLibrary,
@@ -41,7 +49,7 @@ import {
   runReorderPlaylist,
 } from "./tools/write-playlist.js";
 import { UpdateTrackMetadataInput, runUpdateTrackMetadata } from "./tools/write-track-metadata.js";
-import { err, isEngineError, libraryNeedsRecovery, type EngineError } from "./errors.js";
+import { err, forWritePath, isEngineError, libraryNeedsRecovery, type EngineError } from "./errors.js";
 
 /**
  * Every tool here works on files on this machine -- the Engine library, the
@@ -131,7 +139,10 @@ const WRITE_LIBRARY_NOTE =
   "counts are -- the count never said which disk should change. Ask the user which one, then " +
   "retry with `library` set; do not pick for them, since one of them may be the drive they " +
   "perform from. A library copied onto another drive keeps its uuid, so naming a uuid that " +
-  "two connected libraries share is refused the same way -- pass the path.";
+  "two connected libraries share is refused the same way -- pass the path. Every undo step " +
+  "also carries expect_library_uuid, the uuid of the library the edit was made in; replay it " +
+  "verbatim, and the undo refuses rather than landing on a different drive that has since " +
+  "taken that path.";
 
 /**
  * Not UNDO_SCOPE_NOTE: that one says Engine copies *playlist* changes between
@@ -204,6 +215,15 @@ interface LibraryState {
   lib: LibraryInfo;
   qp: QueryProcess;
   mgr: IndexManager;
+}
+
+/**
+ * Whether two readings of the same path describe the same library: the same
+ * uuid and the same schema. Track count is deliberately not compared -- it
+ * changes with every import, and the state is still that library's.
+ */
+function sameLibrary(a: LibraryInfo, b: LibraryInfo): boolean {
+  return a.uuid === b.uuid && a.schema.join(".") === b.schema.join(".");
 }
 
 export async function createServer(
@@ -305,10 +325,28 @@ export async function createServer(
     return join(opts.sidecarBaseDir ?? sidecarDir(""), "duplicate-uuid", libraryTag(lib.path));
   };
 
-  /** Lazily creates -- and thereafter reuses -- one query child per library. */
+  /**
+   * Lazily creates -- and thereafter reuses -- one query child per library.
+   *
+   * Reused only while the library at that path is still the one the state
+   * was built for. The key is a path, and a path names a mount point: swap a
+   * stick for another with the same volume label and `/Volumes/Untitled`
+   * holds a different library. The cached state would then keep serving the
+   * old one -- its query child reading an m.db that no longer exists at that
+   * path, its index manager building into the old uuid's sidecar, and every
+   * write result and backup filename naming the old uuid for rows written
+   * into the new library. The same holds for an Engine DJ upgrade in place,
+   * which keeps the uuid and changes the schema: `supported` would stay what
+   * it was at first use. So a different uuid or schema means a different
+   * library, and the state is rebuilt from the fresh LibraryInfo.
+   */
   const stateFor = (lib: LibraryInfo): LibraryState => {
     const existing = states.get(lib.path);
-    if (existing) return existing;
+    if (existing) {
+      if (sameLibrary(existing.lib, lib)) return existing;
+      existing.qp.dispose();
+      states.delete(lib.path);
+    }
     const qp = new QueryProcess(lib.path, null, 10_000);
     const state: LibraryState = { lib, qp, mgr: new IndexManager(lib, qp, sidecarBaseFor(lib)) };
     states.set(lib.path, state);
@@ -405,22 +443,50 @@ export async function createServer(
    * left alone: they run far more often and a stale pick between two copies
    * is not worth a scan apiece.
    */
-  const selectForWrite = (requested?: string): LibraryInfo | EngineError => {
+  const selectForWrite = (requested?: string, expectUuid?: string): LibraryInfo | EngineError => {
     rescanLibraries();
-    if (requested !== undefined) return namedWriteLibrary(knownList(), requested);
-    const choices = writeNeedsLibrary(knownList());
-    if (choices.length > 0) return ambiguousLibrary(choices);
-    return selectLibrary();
+    const lib = requested !== undefined ? namedWriteLibrary(knownList(), requested) : defaultForWrite();
+    if (isEngineError(lib)) return forWritePath(lib);
+    // After selection, as a check on whatever was chosen: `expect_library_uuid`
+    // never picks a library, it only refuses one that is not what the caller
+    // (usually an undo step being replayed) made its edit in.
+    return expectedLibrary(lib, expectUuid) ?? lib;
   };
 
-  const acquireForWrite = async (requested?: string): Promise<LibraryState | EngineError> => {
-    const lib = selectForWrite(requested);
+  const defaultForWrite = (): LibraryInfo | EngineError => {
+    const choices = writeNeedsLibrary(knownList());
+    if (choices.length > 0) return ambiguousLibrary(choices);
+    const lib = selectLibrary();
+    // selectLibrary falls back to an unsupported library so that a read gets
+    // the specific refusal from ensureFresh; update_track_metadata never
+    // reaches ensureFresh, so the refusal has to be made here for it.
+    if (!isEngineError(lib) && !lib.supported) return unsupportedSchema(lib);
+    return lib;
+  };
+
+  /**
+   * selectForWrite, then the index. Every error out of here fits the write
+   * contract on `detail` (errors.ts, forWritePath): ensureFresh can return an
+   * `index_stale` with no `detail`, or a `library_not_found` carrying a raw
+   * ENOENT string for a drive pulled between the rescan and the header read.
+   */
+  const acquireForWrite = async (requested?: string, expectUuid?: string): Promise<LibraryState | EngineError> => {
+    const lib = selectForWrite(requested, expectUuid);
     if (isEngineError(lib)) return lib;
     // The library just resolved, not `requested` again by the read rules:
     // today both give the same answer, but only this one was checked for a
     // uuid shared between copies.
-    return prepare(lib);
+    const state = await prepare(lib);
+    return isEngineError(state) ? forWritePath(state) : state;
   };
+
+  /**
+   * reply() for the write tools: whatever layer an error came from, its
+   * `detail` is one of the two strings the tool descriptions promise. The
+   * write path's own errors pass through unchanged; see forWritePath for why
+   * `not_committed` is the truthful default for every other one.
+   */
+  const writeReply = (value: unknown) => reply(isEngineError(value) ? forWritePath(value) : value);
 
   /**
    * Shared by the engine://libraries resource and the list_libraries tool so
@@ -722,13 +788,13 @@ export async function createServer(
           "through but could not be verified. track_ids may be empty (an empty playlist); a " +
           "track id may appear at most once. " +
           LIBRARY_SELECTION_NOTE + WRITE_LIBRARY_NOTE,
-        inputSchema: { ...CreatePlaylistInput.shape, library: LibraryArg },
+        inputSchema: { ...CreatePlaylistInput.shape, library: LibraryArg, expect_library_uuid: ExpectLibraryUuidArg },
         annotations: RW,
       },
       async (args) => {
-        const state = await acquireForWrite(args.library);
-        if (isEngineError(state)) return reply(state);
-        return reply(
+        const state = await acquireForWrite(args.library, args.expect_library_uuid);
+        if (isEngineError(state)) return writeReply(state);
+        return writeReply(
           await runCreatePlaylist(
             state.lib.path,
             state.lib.uuid,
@@ -769,13 +835,13 @@ export async function createServer(
           "last-resort recovery route for a damaged library, never an undo. " +
           UNDO_SCOPE_NOTE +
           LIBRARY_SELECTION_NOTE + WRITE_LIBRARY_NOTE,
-        inputSchema: { ...AddTracksToPlaylistInput.shape, library: LibraryArg },
+        inputSchema: { ...AddTracksToPlaylistInput.shape, library: LibraryArg, expect_library_uuid: ExpectLibraryUuidArg },
         annotations: RW,
       },
       async (args) => {
-        const state = await acquireForWrite(args.library);
-        if (isEngineError(state)) return reply(state);
-        return reply(
+        const state = await acquireForWrite(args.library, args.expect_library_uuid);
+        if (isEngineError(state)) return writeReply(state);
+        return writeReply(
           await runAddTracksToPlaylist(state.qp, state.lib.path, state.lib.uuid, args as any, backupDirFor()),
         );
       },
@@ -815,13 +881,13 @@ export async function createServer(
           "discarding everything Engine DJ has recorded since -- not just this edit. " +
           UNDO_SCOPE_NOTE +
           LIBRARY_SELECTION_NOTE + WRITE_LIBRARY_NOTE,
-        inputSchema: { ...RemoveTracksFromPlaylistInput.shape, library: LibraryArg },
+        inputSchema: { ...RemoveTracksFromPlaylistInput.shape, library: LibraryArg, expect_library_uuid: ExpectLibraryUuidArg },
         annotations: RW_DESTRUCTIVE,
       },
       async (args) => {
-        const state = await acquireForWrite(args.library);
-        if (isEngineError(state)) return reply(state);
-        return reply(
+        const state = await acquireForWrite(args.library, args.expect_library_uuid);
+        if (isEngineError(state)) return writeReply(state);
+        return writeReply(
           await runRemoveTracksFromPlaylist(state.qp, state.lib.path, state.lib.uuid, args as any, backupDirFor()),
         );
       },
@@ -849,13 +915,13 @@ export async function createServer(
           "has recorded since -- not just this reorder. " +
           UNDO_SCOPE_NOTE +
           LIBRARY_SELECTION_NOTE + WRITE_LIBRARY_NOTE,
-        inputSchema: { ...ReorderPlaylistInput.shape, library: LibraryArg },
+        inputSchema: { ...ReorderPlaylistInput.shape, library: LibraryArg, expect_library_uuid: ExpectLibraryUuidArg },
         annotations: RW_DESTRUCTIVE,
       },
       async (args) => {
-        const state = await acquireForWrite(args.library);
-        if (isEngineError(state)) return reply(state);
-        return reply(
+        const state = await acquireForWrite(args.library, args.expect_library_uuid);
+        if (isEngineError(state)) return writeReply(state);
+        return writeReply(
           await runReorderPlaylist(state.qp, state.lib.path, state.lib.uuid, args as any, backupDirFor()),
         );
       },
@@ -884,22 +950,18 @@ export async function createServer(
           "refresh_index cannot help until Engine lets go. " +
           TRACK_UNDO_NOTE +
           LIBRARY_SELECTION_NOTE + WRITE_LIBRARY_NOTE,
-        inputSchema: { ...UpdateTrackMetadataInput.shape, library: LibraryArg },
+        inputSchema: { ...UpdateTrackMetadataInput.shape, library: LibraryArg, expect_library_uuid: ExpectLibraryUuidArg },
         annotations: RW_OVERWRITE,
       },
       async (args) => {
-        const lib = selectForWrite(args.library);
-        if (isEngineError(lib)) return reply(lib);
-        // ensureFresh is what refuses an unsupported schema for every other
-        // tool; this path skips it, so it must refuse here.
-        if (!lib.supported) {
-          return reply(
-            err("unsupported_schema", `Schema ${lib.schema.join(".")} is not supported`, {
-              detail: "Supported versions are 3.0.0, 3.0.1 and 3.0.2",
-            }),
-          );
-        }
-        return reply(await runUpdateTrackMetadata(lib.path, lib.uuid, args as any, backupDirFor()));
+        // selectForWrite, not acquireForWrite: this tool addresses tracks by
+        // id and never touches the index. It also never reaches ensureFresh,
+        // which is what refuses an unsupported schema for every other tool,
+        // so selectForWrite refuses one itself (namedWriteLibrary,
+        // defaultForWrite) and nothing here needs to.
+        const lib = selectForWrite(args.library, args.expect_library_uuid);
+        if (isEngineError(lib)) return writeReply(lib);
+        return writeReply(await runUpdateTrackMetadata(lib.path, lib.uuid, args as any, backupDirFor()));
       },
     );
   }

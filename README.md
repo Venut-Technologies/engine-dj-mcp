@@ -92,6 +92,15 @@ cursor://anysphere.cursor-deeplink/mcp/install?name=engine-dj&config=eyJjb21tYW5
 code --add-mcp '{"name":"engine-dj","command":"npx","args":["-y","engine-dj-mcp"]}'
 ```
 
+### Gemini CLI
+
+```bash
+gemini extensions install https://github.com/Venut-Technologies/engine-dj-mcp
+```
+
+The extension manifest (`gemini-extension.json`) starts the same read-only
+server as the entries above.
+
 ### Letting it write
 
 To let the assistant create and edit playlists and edit track tags, add
@@ -468,23 +477,25 @@ own checks.
 | Code | Means | Nothing written? |
 | --- | --- | --- |
 | `invalid_argument` | The arguments do not make sense — both `playlist_id` and `playlist_name`, an empty list where one is required, or a `playlist_name` that matches several playlists (every candidate is listed). | yes |
-| `library_not_found` | `library` names nothing connected — the refusal lists what is — or the library's header could not be read. | yes |
+| `library_not_found` | `library` names nothing connected — the refusal lists what is — or no library is connected at all; or the library at that path reports a uuid other than `expect_library_uuid`; or the library's header could not be read. | yes |
 | `ambiguous_library` | No `library` given, and more than one supported library is connected — or the uuid given is shared by copies on different drives. Lists them — see [Choosing a library](#choosing-a-library). | yes |
-| `unsupported_schema` | The library's version is outside what this server supports. | yes |
+| `unsupported_schema` | The library's version is outside what this server supports — the one named, the only one connected, or every copy a shared uuid names. The message says which versions are. | yes |
 | `library_needs_recovery` | Engine DJ left an unrecovered journal. Launch Engine once. | yes |
 | `library_busy` | Something holds a conflicting lock right now. Retry. | yes |
 | `index_stale` | The index could not be built yet, typically because Engine holds a lock on a first run. Carries `retry_after_ms`. | yes |
 | `query_timeout`, `query_process_crashed` | The lookup that resolves a playlist failed. Edit tools only. | yes |
 | `library_unreadable` | The library could not be read; the snapshot taken before the first write could not be made (a full disk, or a Node older than 22.16); or a write's own read-back disagreed with what it wrote, and it was rolled back. | see `detail` |
 
-**`detail` on these errors.** Once the write itself has started, `detail` is
-exactly one of two strings, and a client can read it to decide whether the
-library changed: `not_committed` — the library is what it was — or
-`committed_unverified` — the rare one: the write may have landed but could not
-be confirmed, and only this case hands back a `backup_path`. Refusals raised
-*before* that point — every row above marked "yes" — never opened the library
-for writing, whatever their `detail` says: it may be absent, `not_committed`,
-or explanatory text such as the candidates an ambiguous `playlist_name` lists.
+**`detail` on these errors.** On every error a write tool returns, whichever
+layer it came from, `detail` is exactly one of two strings, and a client can
+read it to decide whether the library changed: `not_committed` — the library
+is what it was — or `committed_unverified` — the rare one: the write may have
+landed but could not be confirmed, and only this case hands back a
+`backup_path`. Every row above marked "yes" is `not_committed`. Anything a
+refusal has to explain — the candidates an ambiguous `playlist_name` matches,
+the versions a supported library may have — is in `message`. Earlier versions
+let a refusal raised before the write began carry prose or nothing in
+`detail`, against what the tool descriptions promised.
 
 ## Resources
 
@@ -535,7 +546,27 @@ apart — and re-read from that path anything the write depends on, since a read
 naming the uuid may have come from the other copy. Reads naming a shared uuid
 are not refused: they answer from one of the copies. Before every write the
 drives are scanned again, so a copy plugged in after the server started is
-counted — as long as its library can be read.
+counted — as long as its library can be read. A copy whose schema this server
+does not support is not counted, named or unnamed: a write could never land in
+it, so a uuid it shares with one supported library resolves to that library,
+and the refusal for two supported copies says how many unsupported ones it
+left off the list. Naming the unsupported copy's own path is still refused,
+with `unsupported_schema`.
+
+**A path names a mount point, not a drive.** macOS mounts two drives carrying
+the same volume label — a default `Untitled` or `NO NAME`, or a disk-level
+clone — as `/Volumes/Untitled` and `/Volumes/Untitled 1`, in the order they
+were plugged in, so after a replug the same path can name the other drive. The
+server notices a different library at a path it has already used and starts
+over for it (a new connection, its own index, its own uuid in every result and
+backup name) rather than keeping the state built for the library that used to
+be there. Every write tool also takes `expect_library_uuid`: not a selector but
+a check, the uuid the chosen library must report, refused with
+`library_not_found` and nothing written if it reports another. Every undo step
+carries it alongside the path, so a replay that would land on a different
+drive now at that path is refused instead of trusting that
+`expect_track_ids` agrees — which, for a playlist edit Engine DJ has already
+copied to the other drive, it would.
 
 The refusal tells the assistant to **ask you** rather than choose. Otherwise
 "pass `library`, here are the two" is an invitation to take the first one,
@@ -636,12 +667,13 @@ ordinary setup: a USB drive and its copy on the computer. This is where you
 check which of them a write went to.
 
 **`undo` reverses the edit in that one library, and only there.** Each undo
-step names it — by path, in the step's own `library` argument — so replaying
-a step verbatim goes back to the library the edit was made in, not to whatever
-the default is at replay time. That matters because a USB drive and its copy
-hold the same playlist ids and the same track ids: a replay that resolved the
-default could land on the wrong disk, and its `expect_track_ids` would agree,
-both sides having been edited the same way.
+step names it — by path, in the step's own `library` argument, and by uuid in
+`expect_library_uuid` — so replaying a step verbatim goes back to the library
+the edit was made in, not to whatever the default is at replay time, and is
+refused if a different library has since taken that path. That matters
+because a USB drive and its copy hold the same playlist ids and the same track
+ids: a replay that resolved the default could land on the wrong disk, and its
+`expect_track_ids` would agree, both sides having been edited the same way.
 
 Engine DJ moves playlist changes between connected libraries by itself, so a
 copy of your edit can still end up somewhere `undo` cannot reach.

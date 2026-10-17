@@ -96,6 +96,43 @@ export function err(
 }
 
 /**
+ * The two values `detail` may hold on an error a write tool returns. Part of
+ * the tool contract (see `detail` above); store/write.ts produces them, and
+ * forWritePath below is what makes every other error reaching a write tool's
+ * caller conform.
+ */
+export const NOT_COMMITTED = "not_committed";
+export const COMMITTED_UNVERIFIED = "committed_unverified";
+
+/**
+ * Makes an error fit the write-path contract on `detail`.
+ *
+ * A write tool answers with errors from several layers that never meant to
+ * speak that contract: library selection (`library_not_found` with no
+ * `detail` at all when nothing is connected), the index manager (an
+ * `unsupported_schema` whose `detail` listed the supported versions, a
+ * `library_not_found` carrying a raw ENOENT string), playlist resolution (an
+ * `invalid_argument` whose `detail` lists the candidate playlists). Each tool
+ * description promises that `detail` is one of the two reserved strings on
+ * any error, and a client that reads it to learn whether the library changed
+ * cannot be asked to also know which layer an error came from.
+ *
+ * Anything the write path itself produced already carries one of the two
+ * strings and passes through untouched. For the rest, `not_committed` is the
+ * truth by construction: the only code that runs after a COMMIT is in
+ * withWriteTransaction, and every error it can return from there is already
+ * marked `committed_unverified`. Whatever prose `detail` held moves into
+ * `message`, so a person still sees it.
+ */
+export function forWritePath(e: EngineError): EngineError {
+  if (e.detail === NOT_COMMITTED || e.detail === COMMITTED_UNVERIFIED) return e;
+  const prose = e.detail?.trim();
+  const message =
+    prose && !e.message.includes(prose) ? `${e.message.replace(/[.\s]+$/, "")}. ${prose}` : e.message;
+  return { ...e, message, detail: NOT_COMMITTED };
+}
+
+/**
  * The single source for this text. It was previously written out by hand in
  * three files, and the one place that built a structured error (connections.ts)
  * threw away everything but `.message` -- forcing query-client.ts to re-stat

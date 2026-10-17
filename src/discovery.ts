@@ -4,9 +4,26 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { err, isEngineError, libraryNeedsRecovery, type EngineError } from "./errors.js";
 import { hasHotJournal } from "./store/connections.js";
-import { libraryCandidates } from "./paths.js";
+import { libraryCandidates, redactPath } from "./paths.js";
 
 export const SUPPORTED_SCHEMAS = ["3.0.0", "3.0.1", "3.0.2"] as const;
+
+/**
+ * The refusal for a library whose schema is outside SUPPORTED_SCHEMAS, from
+ * every path that can meet one -- the index manager on a read, the write
+ * tools before a write. One source so the message and the version list
+ * cannot drift, and so the list is derived from the constant it describes.
+ *
+ * Everything is in `message`, nothing in `detail`: on a write `detail` is
+ * reserved (see errors.ts), and a read gains nothing from the split.
+ */
+export function unsupportedSchema(lib: Pick<LibraryInfo, "schema" | "path">): EngineError {
+  const versions = SUPPORTED_SCHEMAS.join(", ").replace(/, ([^,]+)$/, " and $1");
+  return err(
+    "unsupported_schema",
+    `Schema ${lib.schema.join(".")} at ${redactPath(lib.path)} is not supported; supported versions are ${versions}.`,
+  );
+}
 
 export interface LibraryInfo {
   path: string;

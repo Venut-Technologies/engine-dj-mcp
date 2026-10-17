@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir, homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -18,6 +18,7 @@ import {
   findLibraries,
   namedWriteLibrary,
   libraryNotFound,
+  expectedLibrary,
 } from "../src/library-select.js";
 import { isEngineError, type EngineError } from "../src/errors.js";
 import type { LibraryInfo } from "../src/discovery.js";
@@ -210,6 +211,62 @@ describe("a named library for a write", () => {
   it("tells the caller to re-read from the chosen path, since a read by the uuid may have used the other copy", () => {
     expect((namedWriteLibrary([first, clone], shared) as EngineError).message).toContain("re-read");
     expect(ambiguousLibrary([first, clone]).message).toContain("re-read");
+  });
+
+  // An old stick that was never upgraded, or a library Engine has upgraded
+  // past this server: it still carries the uuid, and a write can never land
+  // in it. writeNeedsLibrary already leaves such a copy out when `library` is
+  // omitted; naming the uuid used to count it, and refused with a choice one
+  // half of which was unusable.
+  const stale = info({
+    path: "/Volumes/OLD-STICK/Engine Library/Database2/m.db",
+    uuid: shared,
+    schema: [3, 1, 0],
+    supported: false,
+    trackCount: 200,
+  });
+
+  it("counts only a copy a write could land in: a shared uuid with one supported copy resolves to it", () => {
+    expect(namedWriteLibrary([stale, first, other], shared)).toBe(first);
+    expect(namedWriteLibrary([first, stale, other], shared)).toBe(first);
+  });
+
+  it("refuses with unsupported_schema, on the write contract, when every copy the uuid names is unsupported", () => {
+    const e = namedWriteLibrary([stale, other], shared) as EngineError;
+    expect(e.error).toBe("unsupported_schema");
+    expect(e.detail).toBe("not_committed");
+    expect(e.message).toContain("3.1.0");
+    expect(e.message).toContain(stale.path);
+    expect(e.message).toContain("3.0.2");
+  });
+
+  it("lists only the writable copies when two are supported and one is not, and says one was left off", () => {
+    const e = namedWriteLibrary([first, stale, clone], shared) as EngineError;
+    expect(e.error).toBe("ambiguous_library");
+    expect(e.detail).toBe("not_committed");
+    expect(e.message).toContain(first.path);
+    expect(e.message).toContain(clone.path);
+    expect(e.message).not.toContain(stale.path);
+    expect(e.message).toContain("1 more copy");
+  });
+});
+
+describe("expectedLibrary", () => {
+  const lib = info({ path: "/Volumes/Untitled/Engine Library/Database2/m.db", uuid: "AAAA-1111" });
+
+  it("passes when nothing was expected, or when the library reports the uuid expected in any case", () => {
+    expect(expectedLibrary(lib, undefined)).toBeNull();
+    expect(expectedLibrary(lib, "AAAA-1111")).toBeNull();
+    expect(expectedLibrary(lib, " aaaa-1111 ")).toBeNull();
+  });
+
+  it("refuses a library reporting another uuid as library_not_found, naming both, with detail on the write contract", () => {
+    const e = expectedLibrary(lib, "BBBB-2222")!;
+    expect(e.error).toBe("library_not_found");
+    expect(e.detail).toBe("not_committed");
+    expect(e.message).toContain("AAAA-1111");
+    expect(e.message).toContain("BBBB-2222");
+    expect(e.message).toContain(lib.path);
   });
 });
 
@@ -1123,5 +1180,291 @@ describe("a write naming a uuid two connected libraries share", () => {
     expect(digest(aMdb)).toBe(beforeA);
     expect(digest(lateMdb)).toBe(beforeLate);
     rmSync(late, { recursive: true, force: true });
+  });
+});
+
+describe("the library at a path is replaced by another", () => {
+  // The same mount point, a different library: a stick swapped for another
+  // one carrying the same volume label, or an Engine Library folder replaced
+  // in place. Per-library state is keyed by path, so without care the state
+  // built for the first library keeps serving once the second is there.
+  const OLD = "01d01d01-aaaa-4aaa-8aaa-01d01d01d01d";
+  const NEW = "4e4e4e4e-bbbb-4bbb-8bbb-4e4e4e4e4e4e";
+  let root: string;
+  let seq = 0;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "edj-swap-"));
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const writeServer = async (roots: string[]) => {
+    const server = await createServer({
+      roots,
+      sidecarBaseDir: join(root, `sidecars-${++seq}`),
+      allowWrites: true,
+      backupBaseDir: join(root, "backups"),
+    });
+    openServers.push(server);
+    const client = new Client({ name: "swap-client", version: "0" });
+    const [st, ct] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return client;
+  };
+
+  const digest = (mdb: string) => createHash("sha256").update(readFileSync(mdb)).digest("hex");
+
+  const trackIds = (mdb: string) => {
+    const db = new DatabaseSync(mdb, { readOnly: true });
+    const rows = db.prepare("SELECT trackId FROM PlaylistEntity WHERE listId = 1 ORDER BY id").all() as any[];
+    db.close();
+    return rows.map((r) => r.trackId as number);
+  };
+
+  /** A fresh root holding one library, with playlist 1 = [1] (plus `extra`). */
+  const plant = (dir: string, uuid: string, marker: string, extra: number[] = []) => {
+    rmSync(join(dir, "Engine Library"), { recursive: true, force: true });
+    const mdb = makeLibrary(dir, { tracks: 20, uuid, marker });
+    const entries = [1, ...extra].map((t, i, all) => ({ id: i + 1, trackId: t, next: i + 1 < all.length ? i + 2 : 0 }));
+    addPlaylists(mdb, [{ id: 1, title: "Set", nextListId: 0, entries }]);
+    return mdb;
+  };
+
+  it("serves and names the library now at the path, not the one first seen there", async () => {
+    const dir = join(root, "serve");
+    mkdirSync(dir);
+    const mdb = plant(dir, OLD, "OLDMARK");
+    const client = await writeServer([dir]);
+
+    // First use builds the per-path state for OLD: a query child holding the
+    // old m.db open, an index under the old uuid.
+    const first = await client.callTool({ name: "search_tracks", arguments: { q: "OLDMARK", limit: 5, library: mdb } });
+    expect((first.structuredContent as any).tracks.length).toBeGreaterThan(0);
+
+    plant(dir, NEW, "NEWMARK");
+
+    // A write rescans and must act as -- and report -- the library now there.
+    // Before the fix the rows landed in the new file while `library.uuid` and
+    // the backup filename said OLD, the uuid of a library no longer at that path.
+    const w = await client.callTool({ name: "add_tracks_to_playlist", arguments: { playlist_id: 1, track_ids: [5], library: mdb } });
+    const body = w.structuredContent as any;
+    expect(body.error, `refused with: ${body.message}`).toBeUndefined();
+    expect(body.library.uuid).toBe(NEW);
+    expect(basename(body.backup_path).startsWith(`${NEW}-`), body.backup_path).toBe(true);
+    expect(trackIds(mdb)).toEqual([1, 5]);
+
+    // And a read, once list_libraries has re-read the path: the old query
+    // child would still have the unlinked old database open and find no
+    // NEWMARK rows at all.
+    await client.callTool({ name: "list_libraries", arguments: {} });
+    const after = await client.callTool({ name: "search_tracks", arguments: { q: "NEWMARK", limit: 5, library: mdb } });
+    const found = after.structuredContent as any;
+    expect(found.error, `read refused: ${found.message}`).toBeUndefined();
+    expect(found.tracks.length).toBeGreaterThan(0);
+    const gone = await client.callTool({ name: "search_tracks", arguments: { q: "OLDMARK", limit: 5, library: mdb } });
+    expect((gone.structuredContent as any).tracks.length).toBe(0);
+  });
+
+  it("refuses an undo replayed after the swap, even when expect_track_ids would agree", async () => {
+    // Engine DJ copies a playlist edit to the other drive on its own, so
+    // after a replug the stick now at this path can hold the very same
+    // playlist, and the positions and track ids the undo checks all match.
+    // Only the uuid carried in the undo step tells the two apart.
+    const dir = join(root, "undo");
+    mkdirSync(dir);
+    const mdb = plant(dir, OLD, "OLDMARK");
+    const client = await writeServer([dir]);
+
+    const edit = await client.callTool({ name: "add_tracks_to_playlist", arguments: { playlist_id: 1, track_ids: [5], library: mdb } });
+    const made = edit.structuredContent as any;
+    expect(made.error, `edit refused: ${made.message}`).toBeUndefined();
+    const step = made.undo[0];
+    expect(step.tool).toBe("remove_tracks_from_playlist");
+    expect(step.arguments.library).toBe(mdb);
+    expect(step.arguments.expect_library_uuid).toBe(OLD);
+    expect(step.arguments.expect_track_ids).toEqual([5]);
+
+    // The other stick, with the edit already on it.
+    plant(dir, NEW, "NEWMARK", [5]);
+    const before = digest(mdb);
+
+    const back = await client.callTool({ name: step.tool, arguments: step.arguments });
+    const undone = back.structuredContent as any;
+    expect(undone.error, `undo went through: ${JSON.stringify(undone)}`).toBe("library_not_found");
+    expect(undone.detail).toBe("not_committed");
+    expect(undone.message).toContain(OLD);
+    expect(undone.message).toContain(NEW);
+    expect(digest(mdb), "the library now at that path was not touched").toBe(before);
+
+    // Fixture sanity, by the opposite outcome: with the check dropped, the same
+    // step would have landed, so it really is the uuid that stopped it.
+    const { expect_library_uuid: _dropped, ...unguarded } = step.arguments;
+    const forced = await client.callTool({ name: step.tool, arguments: unguarded });
+    expect((forced.structuredContent as any).error, "the unguarded replay should have gone through").toBeUndefined();
+    expect(trackIds(mdb)).toEqual([1]);
+  });
+
+  it("checks expect_library_uuid on an ordinary write too, against whatever library was chosen", async () => {
+    const dir = join(root, "check");
+    mkdirSync(dir);
+    const mdb = plant(dir, OLD, "OLDMARK");
+    const client = await writeServer([dir]);
+    const before = digest(mdb);
+
+    for (const library of [mdb, OLD, undefined]) {
+      const r = await client.callTool({
+        name: "add_tracks_to_playlist",
+        arguments: { playlist_id: 1, track_ids: [7], library, expect_library_uuid: NEW },
+      });
+      const body = r.structuredContent as any;
+      expect(body.error, `library=${library}`).toBe("library_not_found");
+      expect(body.detail).toBe("not_committed");
+    }
+    expect(digest(mdb)).toBe(before);
+
+    const ok = await client.callTool({
+      name: "add_tracks_to_playlist",
+      arguments: { playlist_id: 1, track_ids: [7], library: mdb, expect_library_uuid: OLD.toUpperCase() },
+    });
+    expect((ok.structuredContent as any).error).toBeUndefined();
+    expect(trackIds(mdb)).toEqual([1, 7]);
+  });
+
+  it("advertises expect_library_uuid on every write tool, and on no read tool", async () => {
+    const dir = join(root, "advertise");
+    mkdirSync(dir);
+    plant(dir, OLD, "OLDMARK");
+    const client = await writeServer([dir]);
+    const { tools } = await client.listTools();
+    for (const tool of tools) {
+      const props = Object.keys(tool.inputSchema.properties ?? {});
+      const isWrite = tool.annotations?.readOnlyHint === false;
+      expect(props.includes("expect_library_uuid"), tool.name).toBe(isWrite);
+      if (isWrite) {
+        expect((tool.inputSchema.required ?? []) as string[], tool.name).not.toContain("expect_library_uuid");
+        expect(String(tool.description), tool.name).toContain("expect_library_uuid");
+      }
+    }
+  });
+});
+
+describe("every refusal a write tool returns fits the detail contract", () => {
+  // Each tool's description promises that on any error `detail` is exactly
+  // "not_committed" or "committed_unverified". The errors below come from
+  // layers that never spoke that contract -- library selection with nothing
+  // connected, the schema check, playlist resolution -- and used to reach the
+  // caller with no `detail`, or with prose in it.
+  let root: string;
+  let seq = 0;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "edj-detail-"));
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const writeServer = async (roots: string[]) => {
+    const server = await createServer({
+      roots,
+      sidecarBaseDir: join(root, `sidecars-${++seq}`),
+      allowWrites: true,
+      backupBaseDir: join(root, "backups"),
+    });
+    openServers.push(server);
+    const client = new Client({ name: "detail-client", version: "0" });
+    const [st, ct] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return client;
+  };
+
+  const WRITES = [
+    ["create_playlist", { title: "Zzz Detail Set", track_ids: [1] }],
+    ["add_tracks_to_playlist", { playlist_id: 1, track_ids: [5] }],
+    ["remove_tracks_from_playlist", { playlist_id: 1, positions: [1] }],
+    ["reorder_playlist", { playlist_id: 1, order: [1] }],
+    ["update_track_metadata", { updates: [{ id: 1, genre: "Zzz Detail" }] }],
+  ] as const;
+
+  it("with no library connected at all: library_not_found, not_committed", async () => {
+    const dir = join(root, "none");
+    mkdirSync(dir);
+    const client = await writeServer([dir]);
+    for (const [tool, args] of WRITES) {
+      const body = (await client.callTool({ name: tool, arguments: { ...args } })).structuredContent as any;
+      expect(body.error, tool).toBe("library_not_found");
+      expect(body.detail, tool).toBe("not_committed");
+    }
+  });
+
+  it("with only an unsupported library: unsupported_schema naming the version, not_committed", async () => {
+    const dir = join(root, "unsupported");
+    mkdirSync(dir);
+    const mdb = makeLibrary(dir, { tracks: 4, schema: [2, 18, 0] });
+    addPlaylists(mdb, [{ id: 1, title: "Set", nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] }]);
+    const before = createHash("sha256").update(readFileSync(mdb)).digest("hex");
+    const client = await writeServer([dir]);
+    for (const library of [undefined, mdb]) {
+      for (const [tool, args] of WRITES) {
+        const body = (await client.callTool({ name: tool, arguments: { ...args, library } })).structuredContent as any;
+        expect(body.error, `${tool} library=${library}`).toBe("unsupported_schema");
+        expect(body.detail, tool).toBe("not_committed");
+        expect(body.message, tool).toContain("2.18.0");
+        expect(body.message, tool).toContain("3.0.2");
+      }
+    }
+    expect(createHash("sha256").update(readFileSync(mdb)).digest("hex")).toBe(before);
+  });
+
+  it("a playlist_name matching two playlists: invalid_argument with the candidates in message, not_committed", async () => {
+    const dir = join(root, "ambiguous-name");
+    mkdirSync(dir);
+    const mdb = makeLibrary(dir, { tracks: 4 });
+    addPlaylists(mdb, [
+      { id: 10, title: "Gigs", nextListId: 12 },
+      { id: 11, title: "Set", parentId: 10, nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] },
+      { id: 12, title: "Archive", nextListId: 0 },
+      { id: 13, title: "Set", parentId: 12, nextListId: 0, entries: [{ id: 2, trackId: 2, next: 0 }] },
+    ]);
+    const client = await writeServer([dir]);
+    for (const [tool, args] of [
+      ["add_tracks_to_playlist", { playlist_name: "Set", track_ids: [3] }],
+      ["remove_tracks_from_playlist", { playlist_name: "Set", positions: [1] }],
+      ["reorder_playlist", { playlist_name: "Set", order: [1] }],
+    ] as const) {
+      const body = (await client.callTool({ name: tool, arguments: { ...args } })).structuredContent as any;
+      expect(body.error, tool).toBe("invalid_argument");
+      expect(body.detail, tool).toBe("not_committed");
+      expect(body.message, tool).toContain("Gigs/Set");
+      expect(body.message, tool).toContain("Archive/Set");
+    }
+  });
+
+  it("a uuid shared with an unsupported clone: the write goes into the supported library, the clone untouched", async () => {
+    const SHARED = "5a5a5a5a-cccc-4ccc-8ccc-5a5a5a5a5a5a";
+    const aRoot = join(root, "shared-a");
+    const bRoot = join(root, "shared-b");
+    mkdirSync(aRoot);
+    mkdirSync(bRoot);
+    const aMdb = makeLibrary(aRoot, { tracks: 20, uuid: SHARED });
+    const bMdb = makeLibrary(bRoot, { tracks: 20, uuid: SHARED, schema: [3, 1, 0] });
+    for (const mdb of [aMdb, bMdb]) {
+      addPlaylists(mdb, [{ id: 1, title: "Set", nextListId: 0, entries: [{ id: 1, trackId: 1, next: 0 }] }]);
+    }
+    const beforeB = createHash("sha256").update(readFileSync(bMdb)).digest("hex");
+    const client = await writeServer([bRoot, aRoot]);
+
+    const named = (await client.callTool({ name: "add_tracks_to_playlist", arguments: { playlist_id: 1, track_ids: [5], library: SHARED } })).structuredContent as any;
+    expect(named.error, `refused with: ${named.message}`).toBeUndefined();
+    expect(named.library.path).toBe(aMdb);
+
+    // The omitted-library rule already ignored the clone; the two must agree.
+    const omitted = (await client.callTool({ name: "add_tracks_to_playlist", arguments: { playlist_id: 1, track_ids: [6] } })).structuredContent as any;
+    expect(omitted.error, `refused with: ${omitted.message}`).toBeUndefined();
+    expect(omitted.library.path).toBe(aMdb);
+
+    // Naming the clone's own path is still refused: a path is taken as named.
+    const clone = (await client.callTool({ name: "add_tracks_to_playlist", arguments: { playlist_id: 1, track_ids: [7], library: bMdb } })).structuredContent as any;
+    expect(clone.error).toBe("unsupported_schema");
+    expect(clone.detail).toBe("not_committed");
+    expect(createHash("sha256").update(readFileSync(bMdb)).digest("hex")).toBe(beforeB);
   });
 });
