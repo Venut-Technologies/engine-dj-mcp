@@ -92,6 +92,15 @@ cursor://anysphere.cursor-deeplink/mcp/install?name=engine-dj&config=eyJjb21tYW5
 code --add-mcp '{"name":"engine-dj","command":"npx","args":["-y","engine-dj-mcp"]}'
 ```
 
+### Gemini CLI
+
+```bash
+gemini extensions install https://github.com/Venut-Technologies/engine-dj-mcp
+```
+
+The extension manifest (`gemini-extension.json`) starts the same read-only
+server as the entries above.
+
 ### Letting it write
 
 To let the assistant create and edit playlists and edit track tags, add

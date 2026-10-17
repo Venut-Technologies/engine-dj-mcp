@@ -21,6 +21,12 @@ commit that makes it.
   with the same volume label have swapped mount points is refused instead of
   landing on the other drive — where, for a playlist edit Engine DJ has
   already copied across, `expect_track_ids` would have agreed. ([#16])
+- `gemini-extension.json`, so the server can be installed as a Gemini CLI
+  extension (`gemini extensions install
+  https://github.com/Venut-Technologies/engine-dj-mcp`) and listed in the
+  Gemini CLI extensions gallery. It starts the same read-only server as every
+  other install path; a test keeps its version in step with `package.json`,
+  and the release workflow refuses a tag that disagrees with it. ([#19])
 
 ### Changed
 
@@ -298,6 +304,7 @@ commit that makes it.
 [#16]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/16
 [#17]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/17
 [#18]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/18
+[#19]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/19
 [Unreleased]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.2...HEAD
 [0.17.2]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.1...v0.17.2
 [0.17.1]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.0...v0.17.1

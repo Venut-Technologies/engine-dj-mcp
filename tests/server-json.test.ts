@@ -7,6 +7,7 @@ const root = join(import.meta.dirname, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   name: string;
   version: string;
+  description: string;
   mcpName: string;
 };
 const server = JSON.parse(readFileSync(join(root, "server.json"), "utf8")) as {
@@ -41,5 +42,39 @@ describe("server.json", () => {
   it("keeps the description within the registry's 100 characters", () => {
     expect(server.description.length).toBeGreaterThan(0);
     expect(server.description.length).toBeLessThanOrEqual(100);
+  });
+});
+
+/**
+ * gemini-extension.json is what the Gemini CLI extensions gallery crawls and
+ * what `gemini extensions install <repo url>` reads. It carries its own
+ * version, so a release commit that forgot it would list a stale version in
+ * the gallery; and its description is package.json's, which is the text the
+ * other manifests use, so the three cannot describe three different servers.
+ * The server it starts must be the same read-only command every other
+ * install path uses: `npx -y engine-dj-mcp`, no `--allow-writes`.
+ */
+describe("gemini-extension.json", () => {
+  const ext = JSON.parse(readFileSync(join(root, "gemini-extension.json"), "utf8")) as {
+    name: string;
+    version: string;
+    description: string;
+    mcpServers: Record<string, { command: string; args: string[] }>;
+  };
+  const plugin = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8")) as {
+    mcpServers: Record<string, { command: string; args: string[] }>;
+  };
+
+  it("carries the package.json name, version and description", () => {
+    expect(ext.name).toBe(pkg.name);
+    expect(ext.version).toBe(pkg.version);
+    expect(ext.description).toBe(pkg.description);
+  });
+
+  it("starts the same read-only server the Claude Code plugin starts", () => {
+    expect(ext.mcpServers).toEqual(plugin.mcpServers);
+    const [server] = Object.values(ext.mcpServers);
+    expect(server!.command).toBe("npx");
+    expect(server!.args).toEqual(["-y", pkg.name]);
   });
 });
