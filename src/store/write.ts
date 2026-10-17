@@ -12,7 +12,14 @@
 // verify, commit, check, close.
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { err, isEngineError, libraryNeedsRecovery, type EngineError } from "../errors.js";
+import {
+  err,
+  isEngineError,
+  libraryNeedsRecovery,
+  NOT_COMMITTED,
+  COMMITTED_UNVERIFIED,
+  type EngineError,
+} from "../errors.js";
 import { snapshotLibrary } from "./backup.js";
 import { hasHotJournal } from "./connections.js";
 import { redactPath } from "../paths.js";
@@ -96,11 +103,11 @@ export interface OriginRef {
  * backup_path, because it is the only case where restoring from a snapshot
  * is ever the right next step.
  *
- * These two strings are part of the tool's contract; see src/errors.ts.
+ * These two strings are part of the tool's contract; they are defined in
+ * src/errors.ts, next to the field they discriminate, and re-exported here
+ * for src/store/track-metadata*.ts.
  */
-/** Exported for src/store/track-metadata*.ts; the string is part of the tool contract. */
-export const NOT_COMMITTED = "not_committed";
-const COMMITTED_UNVERIFIED = "committed_unverified";
+export { NOT_COMMITTED };
 
 /**
  * One snapshot per library per process, which is what "before the first write
@@ -620,12 +627,20 @@ export async function withWriteTransaction<T extends object>(
     // names one. If that drive has since moved, the replay fails loudly with
     // library_not_found rather than quietly editing the other copy.
     //
+    // And the uuid alongside it, as `expect_library_uuid`: a path names a
+    // mount point, not a drive. macOS mounts two sticks with the same volume
+    // label as `/Volumes/Untitled` and `/Volumes/Untitled 1` in plug order,
+    // so after a replug the same path can name the other stick -- and for a
+    // playlist edit Engine has already copied across, `expect_track_ids`
+    // would agree. The replay then refuses with library_not_found unless the
+    // library at that path still reports the uuid this edit was made in.
+    //
     // Injected here rather than in each op so a new op cannot ship without it.
     const withUndo = result as { undo?: UndoStep[] };
     if (Array.isArray(withUndo.undo)) {
       withUndo.undo = withUndo.undo.map((step) => ({
         ...step,
-        arguments: { library: library.path, ...step.arguments },
+        arguments: { library: library.path, expect_library_uuid: uuid, ...step.arguments },
       }));
     }
     return { ...result, library, backup_path: backupPath };

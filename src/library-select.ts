@@ -1,8 +1,8 @@
 // src/library-select.ts
 import { resolve } from "node:path";
 import { z } from "zod";
-import { err, type EngineError } from "./errors.js";
-import type { LibraryInfo } from "./discovery.js";
+import { err, forWritePath, NOT_COMMITTED, type EngineError } from "./errors.js";
+import { unsupportedSchema, type LibraryInfo } from "./discovery.js";
 import { expandHome, redactPath } from "./paths.js";
 
 /**
@@ -25,6 +25,25 @@ export const LIBRARY_ARG_DESCRIPTION =
   "refuses with ambiguous_library as well. Pass the path to write to one of them.";
 
 export const LibraryArg = z.string().min(1).optional().describe(LIBRARY_ARG_DESCRIPTION);
+
+/**
+ * The write tools' second library argument: not a selector but a check.
+ *
+ * A path names a mount point, not a drive. macOS mounts two sticks that carry
+ * the same volume label -- a default `Untitled` or `NO NAME`, or a disk-level
+ * clone -- as `/Volumes/Untitled` and `/Volumes/Untitled 1` in plug order, so
+ * after a replug the same path can name the other stick. Every undo step this
+ * server returns carries `library` as a path and this field as the uuid the
+ * edit was made in, so a replay that would land on a different library at
+ * that path is refused instead.
+ */
+export const EXPECT_LIBRARY_UUID_DESCRIPTION =
+  "Optional check, not a selector: the uuid the chosen library must report, as list_libraries " +
+  "prints it. If the library at `library` (or the default) reports a different uuid, the call is " +
+  "refused with library_not_found and nothing is written -- a different drive may be mounted at " +
+  "that path now. Every undo step carries it; pass it through verbatim when replaying one.";
+
+export const ExpectLibraryUuidArg = z.string().min(1).optional().describe(EXPECT_LIBRARY_UUID_DESCRIPTION);
 
 /**
  * The default when no `library` was given: the supported library with the
@@ -103,7 +122,7 @@ export function ambiguousLibrary(tied: readonly LibraryInfo[]): EngineError {
       `and one of them may be the drive they perform from. A read without \`library\` may have ` +
       `come from a different one of these, so re-read anything the write depends on (track and ` +
       `playlist ids, positions, current values) from the chosen library first.`,
-    { detail: "not_committed" },
+    { detail: NOT_COMMITTED },
   );
 }
 
@@ -161,30 +180,69 @@ export function findLibraries(libs: readonly LibraryInfo[], requested: string): 
  */
 export function namedWriteLibrary(libs: readonly LibraryInfo[], requested: string): LibraryInfo | EngineError {
   const matches = findLibraries(libs, requested);
-  if (matches.length > 1) return sharedUuid(requested, matches);
-  if (matches[0]) return matches[0];
   // The same refusal a read gets, with its list moved into `message`: on a
   // write `detail` is reserved, for the reason given at ambiguousLibrary.
-  const miss = libraryNotFound(requested, libs);
-  return { ...miss, message: `${miss.message}. ${miss.detail}`, detail: "not_committed" };
+  if (matches.length === 0) return forWritePath(libraryNotFound(requested, libs));
+  // Only a library a write could land in counts, the same rule
+  // writeNeedsLibrary applies to an omitted `library`. Before this, a uuid
+  // shared by a supported library and an unsupported copy was refused as
+  // ambiguous, offering a choice one half of which could never be written --
+  // while omitting `library` went to the supported one without a word.
+  const writable = matches.filter((l) => l.supported);
+  if (writable.length === 0) return forWritePath(unsupportedSchema(matches[0]!));
+  if (writable.length > 1) return sharedUuid(requested, writable, matches.length - writable.length);
+  return writable[0]!;
 }
 
 /**
  * The refusal for a uuid naming more than one library. Lists paths, since the
  * uuid is the one thing the candidates do not differ in; `detail` stays
  * exactly "not_committed" for the reason given at ambiguousLibrary.
+ *
+ * `unsupported` is how many further copies share the uuid but could never be
+ * written: they are left off the list so the choice offered is one the caller
+ * can actually take, and counted so the omission is not silent.
  */
-function sharedUuid(requested: string, matches: readonly LibraryInfo[]): EngineError {
+function sharedUuid(requested: string, matches: readonly LibraryInfo[], unsupported = 0): EngineError {
   const list = matches.map((l) => `${redactPath(l.path)} (${l.trackCount} tracks)`).join("; ");
+  const dropped =
+    unsupported > 0
+      ? ` (${unsupported} more cop${unsupported === 1 ? "y" : "ies"} with an unsupported schema not listed)`
+      : "";
   return err(
     "ambiguous_library",
     `"${requested.trim()}" names more than one connected library -- a library copied onto another ` +
-      `drive keeps its uuid: ${list}. Nothing was written. ASK which one to write to, then retry ` +
+      `drive keeps its uuid: ${list}${dropped}. Nothing was written. ASK which one to write to, then retry ` +
       `with \`library\` set to that one's path -- do not choose for them. One of them may be the ` +
       `drive they perform from. A read naming this uuid may have come from another of these copies, ` +
       `so re-read anything the write depends on (track and playlist ids, positions, current values) ` +
       `from that path first.`,
-    { detail: "not_committed" },
+    { detail: NOT_COMMITTED },
+  );
+}
+
+/**
+ * The `expect_library_uuid` check: null when the library resolved for a write
+ * reports the uuid the caller expected (or no expectation was given), else
+ * the refusal.
+ *
+ * `library_not_found` rather than a new code: the library the caller asked
+ * for -- this uuid at this path -- is not here, and that is the same
+ * condition libraryNotFound reports, arrived at with more information. It is
+ * also the code a replay already gets when the path itself is gone, so a
+ * client handles the two the same way. `detail` is reserved on this path.
+ */
+export function expectedLibrary(lib: LibraryInfo, expected: string | undefined): EngineError | null {
+  const want = expected?.trim();
+  if (!want || lib.uuid.toLowerCase() === want.toLowerCase()) return null;
+  return err(
+    "library_not_found",
+    `The library at ${redactPath(lib.path)} reports uuid ${lib.uuid}, not the ${want} this call expected. ` +
+      `Nothing was written. A different drive may be mounted at that path now (two drives with the same ` +
+      `volume label swap mount points when replugged), or the library there was replaced. Call ` +
+      `list_libraries and check which library holds the uuid before retrying; do not drop the check to ` +
+      `force the write.`,
+    { detail: NOT_COMMITTED },
   );
 }
 
