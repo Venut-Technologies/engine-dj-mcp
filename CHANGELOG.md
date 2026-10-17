@@ -12,6 +12,8 @@ commit that makes it.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-17
+
 ### Added
 
 - Every write tool takes `expect_library_uuid`: a check, not a selector. If the
@@ -305,7 +307,8 @@ commit that makes it.
 [#17]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/17
 [#18]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/18
 [#19]: https://github.com/Venut-Technologies/engine-dj-mcp/issues/19
-[Unreleased]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.2...HEAD
+[Unreleased]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.2...v0.18.0
 [0.17.2]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.1...v0.17.2
 [0.17.1]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/Venut-Technologies/engine-dj-mcp/compare/v0.16.0...v0.17.0

@@ -18,13 +18,13 @@
       ]
     }
   ],
-  "version": "0.17.2",
+  "version": "0.18.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "engine-dj-mcp",
-      "version": "0.17.2",
+      "version": "0.18.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
